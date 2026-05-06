@@ -10,6 +10,7 @@
 //  https://github.com/christocracy/cordova-plugin-background-geolocation
 
 #import "CDVBackgroundGeolocation.h"
+#import <WebKit/WebKit.h>
 #import "MAURConfig.h"
 #import "MAURBackgroundGeolocationFacade.h"
 #import "MAURBackgroundTaskManager.h"
@@ -27,7 +28,7 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 
 - (void)pluginInitialize
 {
-    if (@available(iOS 17.0, *)) {
+    if (@available(iOS 17.4, *)) {
         WKWebView *wv = (WKWebView *)self.webViewEngine.engineWebView;
         wv.allowsBackgroundTimeExtension = YES;
     }
@@ -41,21 +42,21 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppTerminate:) name:UIApplicationWillTerminateNotification object:nil];
 }
 
-/**
+/*
  * configure plugin
- * @param {Number} stationaryRadius
- * @param {Number} distanceFilter
- * @param {Number} locationTimeout
+ * @param stationaryRadius
+ * @param distanceFilter
+ * @param locationTimeout
  */
 - (void) configure:(CDVInvokedUrlCommand*)command
 {
     NSLog(@"%@ #%@", TAG, @"configure");
     [self.commandDelegate runInBackground:^{
-        config = [MAURConfig fromDictionary:[command.arguments objectAtIndex:0]];
+        self->config = [MAURConfig fromDictionary:[command.arguments objectAtIndex:0]];
 
         NSError *error = nil;
         CDVPluginResult* result = nil;
-        if ([facade configure:config error:&error]) {
+        if ([self->facade configure:self->config error:&error]) {
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
         } else {
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[self errorToDictionary:error]];
@@ -75,14 +76,14 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     [self.commandDelegate runInBackground:^{
         NSError *error = nil;
 
-        [facade start:&error];
+        [self->facade start:&error];
         if (error == nil) {
             [self sendEvent:@"start"];
         } else {
             [self sendError:error];
         }
         CDVPluginResult* result = nil;
-        if ([facade configure:config error:&error]) {
+        if ([self->facade configure:self->config error:&error]) {
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
         } else {
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[self errorToDictionary:error]];
@@ -100,14 +101,14 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     [self.commandDelegate runInBackground:^{
         NSError *error = nil;
 
-        [facade stop:&error];
+        [self->facade stop:&error];
         if (error == nil) {
             [self sendEvent:@"stop"];
         } else {
             [self sendError:error];
         }
         CDVPluginResult* result = nil;
-        if ([facade configure:config error:&error]) {
+        if ([self->facade configure:self->config error:&error]) {
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
         } else {
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[self errorToDictionary:error]];
