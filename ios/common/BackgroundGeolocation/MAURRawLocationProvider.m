@@ -7,8 +7,10 @@
 //
 
 #import <Foundation/Foundation.h>
+#import <CoreMotion/CoreMotion.h>
 #import "MAURRawLocationProvider.h"
 #import "MAURLocationManager.h"
+#import "MAURActivity.h"
 #import "MAURLogging.h"
 
 static NSString * const TAG = @"RawLocationProvider";
@@ -18,8 +20,12 @@ static NSString * const Domain = @"com.marianhello";
 
     BOOL isStarted;
     MAURLocationManager *locationManager;
-    
+
     MAURConfig *_config;
+    NSTimer *_keepaliveTimer;
+    NSDate  *_lastRealLocationTime;
+    CMMotionActivityManager *_motionActivityManager;
+    BOOL _deviceIsStationary;
 }
 
 - (instancetype) init
@@ -56,8 +62,28 @@ static NSString * const Domain = @"com.marianhello";
     DDLogInfo(@"%@ will start", TAG);
 
     if (!isStarted) {
-        [locationManager stopMonitoringSignificantLocationChanges];
         isStarted = [locationManager start:outError];
+        if (isStarted) {
+            [locationManager setShowsBackgroundLocationIndicator:YES];
+            _lastRealLocationTime = [NSDate date];
+            [_keepaliveTimer invalidate];
+            _keepaliveTimer = [NSTimer scheduledTimerWithTimeInterval:15.0
+                                                               target:self
+                                                             selector:@selector(_keepaliveTick:)
+                                                             userInfo:nil
+                                                              repeats:YES];
+            if ([CMMotionActivityManager isActivityAvailable]) {
+                _motionActivityManager = [[CMMotionActivityManager alloc] init];
+                [_motionActivityManager startActivityUpdatesToQueue:[NSOperationQueue mainQueue]
+                                                       withHandler:^(CMMotionActivity *activity) {
+                    _deviceIsStationary = activity.stationary;
+                    MAURActivity *act = [[MAURActivity alloc] init];
+                    act.type = activity.stationary ? @"STILL" : activity.walking ? @"WALKING" : @"UNKNOWN";
+                    act.confidence = @(activity.confidence);
+                    [self.delegate onActivityChanged:act];
+                }];
+            }
+        }
     }
 
     return isStarted;
@@ -70,6 +96,12 @@ static NSString * const Domain = @"com.marianhello";
     if (!isStarted) {
         return YES;
     }
+
+    [_keepaliveTimer invalidate];
+    _keepaliveTimer = nil;
+
+    [_motionActivityManager stopActivityUpdates];
+    _motionActivityManager = nil;
 
     [locationManager stopMonitoringSignificantLocationChanges];
     if ([locationManager stop:outError]) {
@@ -94,10 +126,26 @@ static NSString * const Domain = @"com.marianhello";
 
 - (void) onLocationsChanged:(NSArray*)locations
 {
+    _lastRealLocationTime = [NSDate date];
     for (CLLocation *location in locations) {
         MAURLocation *bgloc = [MAURLocation fromCLLocation:location];
         [self.delegate onLocationChanged:bgloc];
     }
+}
+
+- (void) _keepaliveTick:(NSTimer *)timer
+{
+    if (!isStarted) return;
+    if (-[_lastRealLocationTime timeIntervalSinceNow] < 15.0) return;
+
+    CLLocation *cached = [MAURLocationManager sharedInstance].locationManager.location;
+    if (cached == nil) return;
+
+    DDLogDebug(@"%@ keepalive: %.0fs gap, device %@",
+               TAG, -[_lastRealLocationTime timeIntervalSinceNow],
+               _deviceIsStationary ? @"stationary (expected)" : @"moving (GPS signal loss)");
+    MAURLocation *bgloc = [MAURLocation fromCLLocation:cached];
+    [self.delegate onLocationChanged:bgloc];
 }
 
 - (void) onError:(NSError*)error

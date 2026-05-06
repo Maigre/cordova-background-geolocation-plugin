@@ -1,14 +1,29 @@
 package com.marianhello.bgloc.provider;
 
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.location.Criteria;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.Manifest;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 
+import androidx.core.app.ActivityCompat;
+
+import com.google.android.gms.location.ActivityRecognition;
+import com.google.android.gms.location.ActivityRecognitionResult;
+import com.google.android.gms.location.DetectedActivity;
 import com.marianhello.bgloc.Config;
+import com.marianhello.bgloc.data.BackgroundActivity;
 import com.marianhello.logging.LoggerManager;
 
 /**
@@ -16,8 +31,49 @@ import com.marianhello.logging.LoggerManager;
  */
 
 public class RawLocationProvider extends AbstractLocationProvider implements LocationListener {
+    private static final long KEEPALIVE_INTERVAL_MS = 15_000;
+    private static final long ACTIVITY_INTERVAL_MS  = 5_000;
+    private static final String ACTIVITY_ACTION = "com.marianhello.bgloc.RAW_ACTIVITY_UPDATE";
+
     private LocationManager locationManager;
+    private String provider;
     private boolean isStarted = false;
+
+    private Handler  _keepaliveHandler;
+    private Runnable _keepaliveTick;
+    private long     _lastRealLocationTime;
+
+    private PendingIntent    _activityPI;
+    private ActivityUpdateReceiver _activityReceiver;
+    private boolean          _deviceIsStationary = false;
+
+    private class ActivityUpdateReceiver extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!ActivityRecognitionResult.hasResult(intent)) return;
+            ActivityRecognitionResult result = ActivityRecognitionResult.extractResult(intent);
+            DetectedActivity activity = mostConfident(result.getProbableActivities());
+            _deviceIsStationary = (activity.getType() == DetectedActivity.STILL);
+            logger.debug("Motion: {} confidence={} stationary={}",
+                BackgroundActivity.getActivityString(activity.getType()),
+                activity.getConfidence(), _deviceIsStationary);
+            handleActivity(activity);
+        }
+    }
+
+    private DetectedActivity mostConfident(java.util.List<DetectedActivity> list) {
+        DetectedActivity best = new DetectedActivity(DetectedActivity.UNKNOWN, 0);
+        for (DetectedActivity a : list) {
+            if (a.getConfidence() > best.getConfidence()) best = a;
+        }
+        return best;
+    }
+
+    private boolean activityRecognitionPermitted() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            ActivityCompat.checkSelfPermission(mContext, Manifest.permission.ACTIVITY_RECOGNITION)
+                == PackageManager.PERMISSION_GRANTED;
+    }
 
     public RawLocationProvider(Context context) {
         super(context);
@@ -36,7 +92,7 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
         if (isStarted) {
             return;
         }
-        String provider = LocationManager.GPS_PROVIDER;
+        provider = LocationManager.GPS_PROVIDER;
         if (!locationManager.getAllProviders().contains(LocationManager.GPS_PROVIDER) ||
                 Build.VERSION.SDK_INT <= 30) {
             Criteria criteria = new Criteria();
@@ -53,6 +109,37 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
             logger.info("Requesting location updates from provider {}", provider);
             locationManager.requestLocationUpdates(provider, mConfig.getInterval(), mConfig.getDistanceFilter(), this);
             isStarted = true;
+            _lastRealLocationTime = SystemClock.elapsedRealtime();
+            _keepaliveHandler = new Handler(Looper.getMainLooper());
+            _keepaliveTick = new Runnable() {
+                @Override public void run() {
+                    if (!isStarted) return;
+                    long elapsed = SystemClock.elapsedRealtime() - _lastRealLocationTime;
+                    if (elapsed >= KEEPALIVE_INTERVAL_MS) {
+                        Location cached = locationManager.getLastKnownLocation(provider);
+                        if (cached != null) {
+                            logger.debug("Keepalive: {}ms gap, device {} — delivering cached position",
+                                elapsed, _deviceIsStationary ? "stationary" : "moving");
+                            handleLocation(cached);
+                        }
+                    }
+                    _keepaliveHandler.postDelayed(this, KEEPALIVE_INTERVAL_MS);
+                }
+            };
+            _keepaliveHandler.postDelayed(_keepaliveTick, KEEPALIVE_INTERVAL_MS);
+
+            if (activityRecognitionPermitted()) {
+                _activityReceiver = new ActivityUpdateReceiver();
+                mContext.registerReceiver(_activityReceiver, new IntentFilter(ACTIVITY_ACTION));
+                Intent activityIntent = new Intent(ACTIVITY_ACTION);
+                activityIntent.setPackage(mContext.getPackageName());
+                int piFlags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE
+                    : PendingIntent.FLAG_UPDATE_CURRENT;
+                _activityPI = PendingIntent.getBroadcast(mContext, 9003, activityIntent, piFlags);
+                ActivityRecognition.getClient(mContext)
+                    .requestActivityUpdates(ACTIVITY_INTERVAL_MS, _activityPI);
+            }
         } catch (SecurityException e) {
             logger.error("Security exception: {}", e.getMessage());
             this.handleSecurityException(e);
@@ -63,6 +150,18 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
     public void onStop() {
         if (!isStarted) {
             return;
+        }
+        if (_keepaliveHandler != null) {
+            _keepaliveHandler.removeCallbacks(_keepaliveTick);
+            _keepaliveHandler = null;
+        }
+        if (_activityPI != null) {
+            ActivityRecognition.getClient(mContext).removeActivityUpdates(_activityPI);
+            _activityPI = null;
+        }
+        if (_activityReceiver != null) {
+            try { mContext.unregisterReceiver(_activityReceiver); } catch (Exception ignored) {}
+            _activityReceiver = null;
         }
         try {
             locationManager.removeUpdates(this);
@@ -90,6 +189,7 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
 
     @Override
     public void onLocationChanged(Location location) {
+        _lastRealLocationTime = SystemClock.elapsedRealtime();
         logger.debug("Location change: {}", location.toString());
 
         showDebugToast("acy:" + location.getAccuracy() + ",v:" + location.getSpeed());

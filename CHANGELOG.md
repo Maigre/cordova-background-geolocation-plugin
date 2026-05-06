@@ -1,5 +1,24 @@
 # Changelog
 
+## v2.4.0 — Flanerie fork (2026-05-06)
+
+Forked from [HaylLtd/cordova-background-geolocation-plugin](https://github.com/HaylLtd/cordova-background-geolocation-plugin) v2.3.3. All changes are in `RAW_PROVIDER` only and are purely additive — existing providers and the JS API are unchanged.
+
+**iOS — `MAURRawLocationProvider.m`**
+
+- **Fix 1** `showsBackgroundLocationIndicator = YES` on start: signals to CoreLocation that the app is in an active navigation session, reducing OS throttling of background position events.
+- **Fix 1b** Native `NSTimer` keepalive (15 s interval): re-delivers the cached `CLLocationManager.location` when no real hardware callback has arrived for 15 s, keeping `lastTimeUpdate` alive without feeding itself (`_lastRealLocationTime` is only reset by real callbacks).
+- **Fix 1c** `CMMotionActivityManager` motion state awareness: fires the existing `activity` event through the delegate pipeline so the JS layer can suppress false GPS-lost alarms during static listening spots. `_deviceIsStationary` is also reflected in keepalive debug logs.
+- **Fix 1d** `WKWebView.allowsBackgroundTimeExtension = YES` (iOS 17+, in `CDVBackgroundGeolocation.pluginInitialize`): prevents the JS context from being suspended by iOS independently of the app process. Fix 1b remains as fallback for pre-iOS 17 devices.
+- **Fix 2** Removed `stopMonitoringSignificantLocationChanges` from `onStart:`: significant-change events now run alongside `startUpdatingLocation` as a coarse parallel keepalive layer (rejected by the JS 30 m accuracy gate for step triggering, but they refresh `lastTimeUpdate`).
+- `CoreMotion.framework` added to `plugin.xml` iOS framework list.
+
+**Android — `RawLocationProvider.java`**
+
+- **Fix 1b** `Handler`/`Runnable` keepalive (15 s interval): re-delivers `LocationManager.getLastKnownLocation()` when no real GPS callback has arrived for 15 s. `_lastRealLocationTime` is only reset by real `onLocationChanged` callbacks. Cleaned up in `onStop()`.
+- **Fix 1c** `ActivityRecognition` motion state awareness: starts activity updates alongside GPS in `onStart()`, fires the existing `handleActivity()` pipeline so the `activity` event reaches JS. `_deviceIsStationary` flag is reflected in keepalive debug logs. Cleaned up in `onStop()`. Guarded by `activityRecognitionPermitted()` (Android Q+ permission check).
+- `provider` promoted from local variable to instance field (required for the keepalive `Runnable` closure).
+
 ## [v2.3.3](https://github.com/HaylLtd/cordova-background-geolocation-plugin/tree/v2.3.3) (2025-05-12)
 
 [Full Changelog](https://github.com/HaylLtd/cordova-background-geolocation-plugin/compare/v2.3.2...v2.3.3)

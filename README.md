@@ -1,3 +1,5 @@
+> **Flanerie fork** — This is a private fork of [HaylLtd/cordova-background-geolocation-plugin](https://github.com/HaylLtd/cordova-background-geolocation-plugin) v2.3.3, maintained for the Flanerie audio walk application. It adds native GPS keepalive, motion state awareness, and WKWebView background extension for locked-screen pocket usage on iOS and Android. See [CHANGELOG.md](CHANGELOG.md) for fork-specific changes. Do not publish to npm.
+
 # Cordova Background Geolocation Plugin
 
 [![npm](https://img.shields.io/npm/v/cordova-background-geolocation-plugin?style=flat-square)](https://www.npmjs.com/package/cordova-background-geolocation-plugin)

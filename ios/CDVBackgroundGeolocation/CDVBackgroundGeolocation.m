@@ -27,6 +27,10 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 
 - (void)pluginInitialize
 {
+    if (@available(iOS 17.0, *)) {
+        WKWebView *wv = (WKWebView *)self.webViewEngine.engineWebView;
+        wv.allowsBackgroundTimeExtension = YES;
+    }
 
     facade = [[MAURBackgroundGeolocationFacade alloc] init];
     facade.delegate = self;
