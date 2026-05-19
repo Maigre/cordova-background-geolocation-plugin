@@ -22,6 +22,21 @@ static MAURLocationManager* sharedCLDelegate = nil;
 static NSString *const TAG = @"MAURLocationManager";
 static NSString *const Domain = @"com.marianhello";
 
+static MAURLocationAuthorizationStatus MAURAuthorizationStatusFromCLAuthorizationStatus(CLAuthorizationStatus status)
+{
+    switch (status) {
+        case kCLAuthorizationStatusRestricted:
+        case kCLAuthorizationStatusDenied:
+            return MAURLocationAuthorizationDenied;
+        case kCLAuthorizationStatusAuthorizedAlways:
+            return MAURLocationAuthorizationAlways;
+        case kCLAuthorizationStatusAuthorizedWhenInUse:
+            return MAURLocationAuthorizationForeground;
+        default:
+            return MAURLocationAuthorizationNotDetermined;
+    }
+}
+
 @implementation MAURLocationManager
 @synthesize locationManager, delegate;
 
@@ -45,11 +60,9 @@ static NSString *const Domain = @"com.marianhello";
 {
     NSAssert([NSThread isMainThread], @"%@ %@", TAG, @"should only be called from the main thread.");
 
-    NSUInteger authStatus;
+    CLAuthorizationStatus authStatus = [self currentAuthorizationStatus];
     
     if ([CLLocationManager respondsToSelector:@selector(authorizationStatus)]) { // iOS 4.2+
-        authStatus = [CLLocationManager authorizationStatus];
-        
         if (authStatus == kCLAuthorizationStatusDenied) {
             if (outError != NULL) {
                 NSDictionary *errorDictionary = @{
@@ -193,6 +206,40 @@ static NSString *const Domain = @"com.marianhello";
     return locationManager.desiredAccuracy;
 }
 
+- (BOOL) locationServicesEnabled
+{
+    if ([CLLocationManager respondsToSelector:@selector(locationServicesEnabled)]) {
+        return [CLLocationManager locationServicesEnabled];
+    }
+
+    return NO;
+}
+
+- (MAURLocationAuthorizationStatus) authorizationStatus
+{
+    return MAURAuthorizationStatusFromCLAuthorizationStatus([self currentAuthorizationStatus]);
+}
+
+- (CLAuthorizationStatus) currentAuthorizationStatus
+{
+    if (@available(iOS 14.0, *)) {
+        return locationManager.authorizationStatus;
+    }
+
+    if ([CLLocationManager respondsToSelector:@selector(authorizationStatus)]) {
+        return [CLLocationManager authorizationStatus];
+    }
+
+    return kCLAuthorizationStatusNotDetermined;
+}
+
+- (void) notifyAuthorizationChanged:(CLAuthorizationStatus)status
+{
+    if (self.delegate && [self.delegate respondsToSelector:@selector(onAuthorizationChanged:)]) {
+        [self.delegate onAuthorizationChanged:MAURAuthorizationStatusFromCLAuthorizationStatus(status)];
+    }
+}
+
 
 #pragma mark -
 #pragma mark CLLocationManagerDelegate Methods
@@ -215,25 +262,13 @@ static NSString *const Domain = @"com.marianhello";
 
 - (void) locationManager:(CLLocationManager *)manager didChangeAuthorizationStatus:(CLAuthorizationStatus)status
 {
-    MAURLocationAuthorizationStatus authStatus;
-    
-    switch(status) {
-        case kCLAuthorizationStatusRestricted:
-        case kCLAuthorizationStatusDenied:
-            authStatus = MAURLocationAuthorizationDenied;
-            break;
-        case kCLAuthorizationStatusAuthorizedAlways:
-            authStatus = MAURLocationAuthorizationAlways;
-            break;
-        case kCLAuthorizationStatusAuthorizedWhenInUse:
-            authStatus = MAURLocationAuthorizationForeground;
-            break;
-        default:
-            return;
-    }
+    [self notifyAuthorizationChanged:status];
+}
 
-    if (self.delegate && [self.delegate respondsToSelector:@selector(onAuthorizationChanged:)]) {
-        [self.delegate onAuthorizationChanged:authStatus];
+- (void) locationManagerDidChangeAuthorization:(CLLocationManager *)manager
+{
+    if (@available(iOS 14.0, *)) {
+        [self notifyAuthorizationChanged:manager.authorizationStatus];
     }
 }
 

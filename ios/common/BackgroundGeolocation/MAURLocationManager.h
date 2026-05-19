@@ -47,6 +47,8 @@
 - (CLActivityType) activityType;
 - (void) setDesiredAccuracy:(CLLocationAccuracy)newDesiredAccuracy;
 - (CLLocationAccuracy) desiredAccuracy;
+- (BOOL) locationServicesEnabled;
+- (MAURLocationAuthorizationStatus) authorizationStatus;
 
 + (MAURLocationManager*)sharedInstance; // Singleton method
 

@@ -261,27 +261,12 @@ FMDBLogger *sqliteLogger;
 
 - (BOOL) locationServicesEnabled
 {
-    if ([CLLocationManager respondsToSelector:@selector(locationServicesEnabled)]) { // iOS 4.x
-        return [CLLocationManager locationServicesEnabled];
-    }
-    
-    return NO;
+    return [[MAURLocationManager sharedInstance] locationServicesEnabled];
 }
 
 - (MAURLocationAuthorizationStatus) authorizationStatus
 {
-    CLAuthorizationStatus authStatus = [CLLocationManager authorizationStatus];
-    switch (authStatus) {
-        case kCLAuthorizationStatusNotDetermined:
-            return MAURLocationAuthorizationNotDetermined;
-        case kCLAuthorizationStatusRestricted:
-        case kCLAuthorizationStatusDenied:
-            return MAURLocationAuthorizationDenied;
-        case kCLAuthorizationStatusAuthorizedAlways:
-            return MAURLocationAuthorizationAlways;
-        case kCLAuthorizationStatusAuthorizedWhenInUse:
-            return MAURLocationAuthorizationForeground;
-    }
+    return [[MAURLocationManager sharedInstance] authorizationStatus];
 }
 
 - (BOOL) isStarted
