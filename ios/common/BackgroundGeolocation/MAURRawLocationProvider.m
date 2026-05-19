@@ -72,8 +72,16 @@ static NSString * const Domain = @"com.marianhello";
                                                              selector:@selector(_keepaliveTick:)
                                                              userInfo:nil
                                                               repeats:YES];
-            [self startMotionActivityUpdates];
         }
+    }
+
+    // Always (re-)start motion updates when the manager is not yet running.
+    // On first install the motion dialog can appear while the location dialog
+    // is still visible, causing the user to miss it. Re-triggering on every
+    // start() call ensures the dialog (re-)appears when the user reaches the
+    // checkmotion screen after granting location permission.
+    if (isStarted && _motionActivityManager == nil) {
+        [self startMotionActivityUpdates];
     }
 
     return isStarted;

@@ -76,9 +76,14 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 {
     NSLog(@"%@ #%@", TAG, @"start");
     [self.commandDelegate runInBackground:^{
-        NSError *error = nil;
+        __block NSError *error = nil;
 
-        [self->facade start:&error];
+        // CLLocationManager must be called from the main thread (requestAlwaysAuthorization,
+        // startUpdatingLocation). dispatch_sync is safe here since we are already on a
+        // background thread (runInBackground dispatches to a global queue).
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            [self->facade start:&error];
+        });
         if (error == nil) {
             [self sendEvent:@"start"];
         } else {
