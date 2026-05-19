@@ -72,17 +72,7 @@ static NSString * const Domain = @"com.marianhello";
                                                              selector:@selector(_keepaliveTick:)
                                                              userInfo:nil
                                                               repeats:YES];
-            if ([CMMotionActivityManager isActivityAvailable]) {
-                _motionActivityManager = [[CMMotionActivityManager alloc] init];
-                [_motionActivityManager startActivityUpdatesToQueue:[NSOperationQueue mainQueue]
-                                                       withHandler:^(CMMotionActivity *activity) {
-                    _deviceIsStationary = activity.stationary;
-                    MAURActivity *act = [[MAURActivity alloc] init];
-                    act.type = activity.stationary ? @"STILL" : activity.walking ? @"WALKING" : @"UNKNOWN";
-                    act.confidence = @(activity.confidence);
-                    [self.delegate onActivityChanged:act];
-                }];
-            }
+            [self startMotionActivityUpdates];
         }
     }
 
@@ -166,6 +156,31 @@ static NSString * const Domain = @"com.marianhello";
 - (void) onDestroy {
     DDLogInfo(@"Destroying %@ ", TAG);
     [self onStop:nil];
+}
+
+- (void) startMotionActivityUpdates
+{
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        if (![CMMotionActivityManager isActivityAvailable]) {
+            return;
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!isStarted || _motionActivityManager != nil) {
+                return;
+            }
+
+            _motionActivityManager = [[CMMotionActivityManager alloc] init];
+            [_motionActivityManager startActivityUpdatesToQueue:[NSOperationQueue mainQueue]
+                                                   withHandler:^(CMMotionActivity *activity) {
+                _deviceIsStationary = activity.stationary;
+                MAURActivity *act = [[MAURActivity alloc] init];
+                act.type = activity.stationary ? @"STILL" : activity.walking ? @"WALKING" : @"UNKNOWN";
+                act.confidence = @(activity.confidence);
+                [self.delegate onActivityChanged:act];
+            }];
+        });
+    });
 }
 
 - (void) dealloc
