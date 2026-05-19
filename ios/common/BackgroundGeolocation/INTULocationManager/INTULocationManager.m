@@ -69,6 +69,9 @@
 // @[ INTUHeadingRequest *headingRequest1, INTUHeadingRequest *headingRequest2, ... ]
 @property (nonatomic, strong) __INTU_GENERICS(NSArray, INTUHeadingRequest *) *headingRequests;
 
+- (CLAuthorizationStatus)currentAuthorizationStatus;
+- (void)handleAuthorizationStatusChange:(CLAuthorizationStatus)status;
+
 @end
 
 
@@ -81,17 +84,20 @@ static id _sharedInstance;
  */
 + (INTULocationServicesState)locationServicesState
 {
-    if ([CLLocationManager locationServicesEnabled] == NO) {
-        return INTULocationServicesStateDisabled;
-    }
-    else if ([CLLocationManager authorizationStatus] == kCLAuthorizationStatusNotDetermined) {
+    INTULocationManager *sharedInstance = [INTULocationManager sharedInstance];
+    CLAuthorizationStatus authorizationStatus = [sharedInstance currentAuthorizationStatus];
+
+    if (authorizationStatus == kCLAuthorizationStatusNotDetermined) {
         return INTULocationServicesStateNotDetermined;
     }
-    else if ([CLLocationManager authorizationStatus] == kCLAuthorizationStatusDenied) {
+    else if (authorizationStatus == kCLAuthorizationStatusDenied) {
         return INTULocationServicesStateDenied;
     }
-    else if ([CLLocationManager authorizationStatus] == kCLAuthorizationStatusRestricted) {
+    else if (authorizationStatus == kCLAuthorizationStatusRestricted) {
         return INTULocationServicesStateRestricted;
+    }
+    else if ([CLLocationManager locationServicesEnabled] == NO) {
+        return INTULocationServicesStateDisabled;
     }
     
     return INTULocationServicesStateAvailable;
@@ -208,7 +214,7 @@ static id _sharedInstance;
     locationRequest.timeout = timeout;
     locationRequest.block = block;
     
-    BOOL deferTimeout = delayUntilAuthorized && ([CLLocationManager authorizationStatus] == kCLAuthorizationStatusNotDetermined);
+    BOOL deferTimeout = delayUntilAuthorized && ([self currentAuthorizationStatus] == kCLAuthorizationStatusNotDetermined);
     if (!deferTimeout) {
         [locationRequest startTimeoutTimerIfNeeded];
     }
@@ -462,7 +468,7 @@ static id _sharedInstance;
     
     double iOSVersion = floor(NSFoundationVersionNumber);
     BOOL isiOSVersion7to10 = iOSVersion > NSFoundationVersionNumber_iOS_7_1 && iOSVersion <= NSFoundationVersionNumber10_11_Max;
-    if ([CLLocationManager authorizationStatus] == kCLAuthorizationStatusNotDetermined) {
+    if ([self currentAuthorizationStatus] == kCLAuthorizationStatusNotDetermined) {
         if (isiOSVersion7to10) {
             BOOL hasAlwaysKey = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSLocationAlwaysUsageDescription"] != nil;
             BOOL hasWhenInUseKey = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSLocationWhenInUseUsageDescription"] != nil;
@@ -488,6 +494,35 @@ static id _sharedInstance;
         }
     }
 #endif /* __IPHONE_OS_VERSION_MAX_ALLOWED > __IPHONE_7_1 */
+}
+
+- (CLAuthorizationStatus)currentAuthorizationStatus
+{
+    if (@available(iOS 14.0, *)) {
+        return self.locationManager.authorizationStatus;
+    }
+
+    return [CLLocationManager authorizationStatus];
+}
+
+- (void)handleAuthorizationStatusChange:(CLAuthorizationStatus)status
+{
+    if (status == kCLAuthorizationStatusDenied || status == kCLAuthorizationStatusRestricted) {
+        // Clear out any active location requests (which will execute the blocks with a status that reflects
+        // the unavailability of location services) since we now no longer have location services permissions
+        [self completeAllLocationRequests];
+    }
+#if __IPHONE_OS_VERSION_MAX_ALLOWED > __IPHONE_7_1
+    else if (status == kCLAuthorizationStatusAuthorizedAlways || status == kCLAuthorizationStatusAuthorizedWhenInUse) {
+#else
+    else if (status == kCLAuthorizationStatusAuthorized) {
+#endif /* __IPHONE_OS_VERSION_MAX_ALLOWED > __IPHONE_7_1 */
+
+        // Start the timeout timer for location requests that were waiting for authorization
+        for (INTULocationRequest *locationRequest in self.locationRequests) {
+            [locationRequest startTimeoutTimerIfNeeded];
+        }
+    }
 }
 
 /**
@@ -986,21 +1021,13 @@ BOOL INTUCLHeadingIsIsValid(CLHeading *heading)
 
 - (void)locationManager:(CLLocationManager *)manager didChangeAuthorizationStatus:(CLAuthorizationStatus)status
 {
-    if (status == kCLAuthorizationStatusDenied || status == kCLAuthorizationStatusRestricted) {
-        // Clear out any active location requests (which will execute the blocks with a status that reflects
-        // the unavailability of location services) since we now no longer have location services permissions
-        [self completeAllLocationRequests];
-    }
-#if __IPHONE_OS_VERSION_MAX_ALLOWED > __IPHONE_7_1
-    else if (status == kCLAuthorizationStatusAuthorizedAlways || status == kCLAuthorizationStatusAuthorizedWhenInUse) {
-#else
-    else if (status == kCLAuthorizationStatusAuthorized) {
-#endif /* __IPHONE_OS_VERSION_MAX_ALLOWED > __IPHONE_7_1 */
+    [self handleAuthorizationStatusChange:status];
+}
 
-        // Start the timeout timer for location requests that were waiting for authorization
-        for (INTULocationRequest *locationRequest in self.locationRequests) {
-            [locationRequest startTimeoutTimerIfNeeded];
-        }
+- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager
+{
+    if (@available(iOS 14.0, *)) {
+        [self handleAuthorizationStatusChange:manager.authorizationStatus];
     }
 }
 

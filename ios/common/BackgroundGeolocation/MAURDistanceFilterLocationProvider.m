@@ -29,6 +29,10 @@ enum {
 };
 
 @interface MAURDistanceFilterLocationProvider () <CLLocationManagerDelegate>
+
+- (CLAuthorizationStatus) currentAuthorizationStatus;
+- (void) handleAuthorizationStatusChange:(CLAuthorizationStatus)status;
+
 @end
 
 @implementation MAURDistanceFilterLocationProvider {
@@ -101,11 +105,9 @@ enum {
 {
     DDLogInfo(@"%@ will start", TAG);
     
-    NSUInteger authStatus;
+    CLAuthorizationStatus authStatus = [self currentAuthorizationStatus];
     
     if ([CLLocationManager respondsToSelector:@selector(authorizationStatus)]) { // iOS 4.2+
-        authStatus = [CLLocationManager authorizationStatus];
-        
         if (authStatus == kCLAuthorizationStatusDenied) {
             if (outError != NULL) {
                 NSDictionary *errorDictionary = @{
@@ -148,6 +150,15 @@ enum {
     isStarted = YES;
 
     return YES;
+}
+
+- (CLAuthorizationStatus) currentAuthorizationStatus
+{
+    if (@available(iOS 14.0, *)) {
+        return locationManager.authorizationStatus;
+    }
+
+    return [CLLocationManager authorizationStatus];
 }
 
 /**
@@ -378,11 +389,23 @@ enum {
 
 - (void) locationManager:(CLLocationManager *)manager didChangeAuthorizationStatus:(CLAuthorizationStatus)status
 {
+    [self handleAuthorizationStatusChange:status];
+}
+
+- (void) locationManagerDidChangeAuthorization:(CLLocationManager *)manager
+{
+    if (@available(iOS 14.0, *)) {
+        [self handleAuthorizationStatusChange:manager.authorizationStatus];
+    }
+}
+
+- (void) handleAuthorizationStatusChange:(CLAuthorizationStatus)status
+{
     DDLogInfo(@"LocationManager didChangeAuthorizationStatus %u", status);
     if ([_config isDebugging]) {
         [self notify:[NSString stringWithFormat:@"Authorization status changed %u", status]];
     }
-    
+
     switch(status) {
         case kCLAuthorizationStatusRestricted:
         case kCLAuthorizationStatusDenied:
