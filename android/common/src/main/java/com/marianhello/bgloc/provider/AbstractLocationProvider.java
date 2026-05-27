@@ -102,6 +102,23 @@ public abstract class AbstractLocationProvider implements LocationProvider {
     }
 
     /**
+     * v2.9.0 Architecture D — handle a location with dispatch metadata.
+     * dispatchSource ∈ {"raw", "raw-keepalive", "fused"} tags which subsystem
+     * produced this fix; isKeepalive is the independent flag the JS-side
+     * GEO.lastRealCallbackTime check uses to ignore cached replays.
+     */
+    protected void handleLocation (Location location, String dispatchSource, boolean isKeepalive) {
+        playDebugTone(Tone.BEEP);
+        if (mDelegate != null) {
+            BackgroundLocation bgLocation = new BackgroundLocation(PROVIDER_ID, location);
+            bgLocation.setMockLocationsEnabled(hasMockLocationsEnabled());
+            bgLocation.setDispatchSource(dispatchSource);
+            bgLocation.setKeepalive(isKeepalive);
+            mDelegate.onLocation(bgLocation);
+        }
+    }
+
+    /**
      * Handle stationary location with radius
      *
      * @param location

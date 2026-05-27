@@ -43,6 +43,15 @@ public class BackgroundLocation implements Parcelable {
     private int status = POST_PENDING;
     private Bundle extras = null;
 
+    // v2.9.0 Architecture D dispatch metadata. dispatchSource tags which
+    // internal subsystem produced this fix: "raw" (real GPS/network callback
+    // via LocationManager), "raw-keepalive" (BG-5 AlarmManager cached replay),
+    // or "fused" (FusedLocationProviderClient fallback). isKeepalive is the
+    // independent flag used by the dedupe state machine — cached replays must
+    // not reset _lastRawFreshMs.
+    private String dispatchSource = null;
+    private boolean isKeepalive = false;
+
     private static final long TWO_MINUTES_IN_NANOS = 1000000000L * 60 * 2;
 
     public BackgroundLocation() {}
@@ -899,9 +908,22 @@ public class BackgroundLocation implements Parcelable {
         if (hasRadius) json.put("radius", radius);
         if (hasIsFromMockProvider()) json.put("isFromMockProvider", isFromMockProvider());
         if (hasMockLocationsEnabled()) json.put("mockLocationsEnabled", areMockLocationsEnabled());
+        // v2.9.0 Architecture D: surface dispatch metadata so JS sees which
+        // subsystem produced each fix and the dedupe machine's effect is
+        // visible in post-hoc analysis. Field names mirror the iOS F-G4
+        // payload (is_keepalive) so the JS layer (geoloc.js) reads them
+        // identically across platforms.
+        if (dispatchSource != null) json.put("dispatch_source", dispatchSource);
+        if (isKeepalive) json.put("is_keepalive", true);
 
         return json;
   	}
+
+    // v2.9.0 Architecture D accessors.
+    public String getDispatchSource() { return dispatchSource; }
+    public void setDispatchSource(String source) { this.dispatchSource = source; }
+    public boolean isKeepalive() { return isKeepalive; }
+    public void setKeepalive(boolean keepalive) { this.isKeepalive = keepalive; }
 
     /**
      * Returns location as JSON object containing location id

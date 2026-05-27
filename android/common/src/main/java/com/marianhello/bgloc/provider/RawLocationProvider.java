@@ -39,6 +39,17 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
     // BG-5: AlarmManager action — wakes the provider even in Doze.
     private static final String ALARM_WAKE_ACTION = "com.marianhello.bgloc.RAW_LOCATION_WAKE";
 
+    // v2.9.0 — Architecture D dedupe state machine.
+    // STALE_RAW_MS: if no fresh (non-keepalive) Raw fix in this window, Fused
+    //   deliveries are no longer suppressed. 20 s is comfortably above the
+    //   BG-5 keepalive cadence (15 s) so the keepalive replay itself is not
+    //   relied on as the dedupe primary signal.
+    // MAX_FUSED_AGE_MS: ignore Fused fixes whose location.time is older than
+    //   this (1 min). FLP can return cached fixes via getLastLocation that are
+    //   minutes old; delivering them as "current position" would be wrong.
+    private static final long STALE_RAW_MS     = 20_000;
+    private static final long MAX_FUSED_AGE_MS = 60_000;
+
     // P0.5 Fix 1e (v2.8.0) — diagnostic counters readable from JS via the
     // CDV action getAlarmWakeStats. Lets the webapp tell whether the
     // AlarmManager wake-receiver is firing during Doze while JS appears
@@ -47,6 +58,16 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
     public static volatile long sAlarmFireCount = 0;
     public static volatile long sLastAlarmFireMs = 0;
     public static volatile long sLastCachedDeliveredMs = 0;
+
+    // v2.9.0 — Architecture D dispatch counters.
+    public static volatile long sRawDeliveredCount        = 0;
+    public static volatile long sRawKeepaliveCount        = 0;
+    public static volatile long sFusedDeliveredCount      = 0;
+    public static volatile long sFusedSuppressedCount     = 0;
+    public static volatile long sFusedStaleIgnoredCount   = 0;
+    public static volatile long sLastDeliveredMs          = 0;
+    public static volatile String sLastDeliveredSource    = null;
+    public static volatile boolean sFusedAvailable        = false;
 
     private LocationManager locationManager;
     private String provider;
@@ -62,6 +83,11 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
 
     private PendingIntent       _alarmPI;
     private LocationWakeReceiver _alarmReceiver;
+
+    // v2.9.0 — Architecture D Fused parallel stream. Owned by this provider
+    // so the dedupe state machine has direct access to _lastRealLocationTime.
+    private FusedLocationProviderHelper _fused;
+    private long _lastRawFreshMs = 0;
 
     /**
      * BG-5: AlarmManager keepalive receiver — fires via setExactAndAllowWhileIdle even in Doze.
@@ -86,7 +112,7 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
                     logger.debug("AlarmWake: {}ms gap, device {} — delivering cached position",
                         elapsed, _deviceIsStationary ? "stationary" : "moving");
                     sLastCachedDeliveredMs = System.currentTimeMillis();
-                    handleLocation(cached);
+                    deliverRawKeepalive(cached);
                 }
             }
         }
@@ -178,7 +204,7 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
                         if (cached != null) {
                             logger.debug("Keepalive: {}ms gap, device {} — delivering cached position",
                                 elapsed, _deviceIsStationary ? "stationary" : "moving");
-                            handleLocation(cached);
+                            deliverRawKeepalive(cached);
                         }
                     }
                     _keepaliveHandler.postDelayed(this, KEEPALIVE_INTERVAL_MS);
@@ -190,6 +216,17 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
             _alarmReceiver = new LocationWakeReceiver();
             mContext.registerReceiver(_alarmReceiver, new IntentFilter(ALARM_WAKE_ACTION));
             scheduleNextAlarm();
+
+            // v2.9.0 Architecture D — start the Fused parallel stream. Fail-soft
+            // if GMS is unavailable (handled inside the helper). The helper calls
+            // back via the Listener interface into onFusedLocation below.
+            _fused = new FusedLocationProviderHelper(mContext, new FusedLocationProviderHelper.Listener() {
+                @Override public void onFusedLocation(Location location) {
+                    RawLocationProvider.this.onFusedLocation(location);
+                }
+            });
+            _fused.start();
+            sFusedAvailable = _fused.isAvailable() && _fused.isStarted();
 
             if (activityRecognitionPermitted()) {
                 _activityReceiver = new ActivityUpdateReceiver();
@@ -235,6 +272,12 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
             try { mContext.unregisterReceiver(_activityReceiver); } catch (Exception ignored) {}
             _activityReceiver = null;
         }
+        // v2.9.0 Architecture D — tear down Fused parallel stream.
+        if (_fused != null) {
+            try { _fused.stop(); } catch (Throwable ignored) {}
+            _fused = null;
+            sFusedAvailable = false;
+        }
         try {
             locationManager.removeUpdates(this);
         } catch (SecurityException e) {
@@ -265,7 +308,61 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
         logger.debug("Location change: {}", location.toString());
 
         showDebugToast("acy:" + location.getAccuracy() + ",v:" + location.getSpeed());
-        handleLocation(location);
+        deliverRaw(location);
+    }
+
+    // ───────── v2.9.0 Architecture D dispatch helpers ─────────
+
+    /**
+     * Real Raw fix (LocationManager onLocationChanged). Updates the dedupe
+     * fresh-marker and delivers tagged as "raw".
+     */
+    private void deliverRaw(Location location) {
+        _lastRawFreshMs = System.currentTimeMillis();
+        sRawDeliveredCount++;
+        sLastDeliveredMs = _lastRawFreshMs;
+        sLastDeliveredSource = "raw";
+        handleLocation(location, "raw", false);
+    }
+
+    /**
+     * Cached Raw replay from the BG-5 AlarmManager receiver or the 15 s
+     * Handler keepalive tick. Tagged "raw-keepalive" with isKeepalive=true.
+     * Does NOT update _lastRawFreshMs — keepalive replay must not prevent
+     * Fused fallback when real GPS is silent.
+     */
+    private void deliverRawKeepalive(Location location) {
+        sRawKeepaliveCount++;
+        sLastDeliveredMs = System.currentTimeMillis();
+        sLastDeliveredSource = "raw-keepalive";
+        handleLocation(location, "raw-keepalive", true);
+    }
+
+    /**
+     * Fused fix from FusedLocationProviderClient. Dedupe policy:
+     *   1. Drop if location.time is older than MAX_FUSED_AGE_MS (FLP can
+     *      return cached fixes via getLastLocation that are minutes old).
+     *   2. Suppress if Raw is still fresh (within STALE_RAW_MS) — Raw is the
+     *      authoritative source for accuracy / cadence.
+     *   3. Otherwise deliver tagged "fused".
+     */
+    private void onFusedLocation(Location location) {
+        long now = System.currentTimeMillis();
+        long fusedAge = now - location.getTime();
+        if (fusedAge > MAX_FUSED_AGE_MS) {
+            sFusedStaleIgnoredCount++;
+            return;
+        }
+        long rawAge = now - _lastRawFreshMs;
+        if (_lastRawFreshMs > 0 && rawAge < STALE_RAW_MS) {
+            sFusedSuppressedCount++;
+            return;
+        }
+        sFusedDeliveredCount++;
+        sLastDeliveredMs = now;
+        sLastDeliveredSource = "fused";
+        logger.debug("Fused: delivering (rawAge={}ms, fusedAge={}ms)", rawAge, fusedAge);
+        handleLocation(location, "fused", false);
     }
 
     @Override

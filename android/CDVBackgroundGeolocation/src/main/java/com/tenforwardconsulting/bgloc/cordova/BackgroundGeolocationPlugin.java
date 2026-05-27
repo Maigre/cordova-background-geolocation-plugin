@@ -76,6 +76,11 @@ public class BackgroundGeolocationPlugin extends CordovaPlugin implements Plugin
     // so the webapp can detect "AlarmManager fired but JS got no fresh callback"
     // (i.e. WebView suspended despite native keepalive running).
     public static final String ACTION_GET_ALARM_WAKE_STATS = "getAlarmWakeStats";
+    // v2.9.0 Architecture D — read the RawLocationProvider dedupe dispatch
+    // counters (raw / raw-keepalive / fused delivered + fused suppressed +
+    // fused stale ignored) so the webapp can observe how often FLP fills in
+    // for Raw stalls during the walk.
+    public static final String ACTION_GET_LOCATION_DISPATCH_STATS = "getLocationDispatchStats";
 
     private BackgroundGeolocationFacade facade;
 
@@ -387,6 +392,26 @@ public class BackgroundGeolocationPlugin extends CordovaPlugin implements Plugin
                 callbackContext.success(stats);
             } catch (JSONException e) {
                 callbackContext.sendPluginResult(ErrorPluginResult.from("getAlarmWakeStats failed", e, PluginException.JSON_ERROR));
+            }
+            return true;
+        } else if (ACTION_GET_LOCATION_DISPATCH_STATS.equals(action)) {
+            // v2.9.0 Architecture D — return the Raw/Fused dedupe counters.
+            try {
+                JSONObject stats = new JSONObject();
+                long now = System.currentTimeMillis();
+                long lastDeliv = RawLocationProvider.sLastDeliveredMs;
+                stats.put("fusedAvailable",          RawLocationProvider.sFusedAvailable);
+                stats.put("rawDelivered",            RawLocationProvider.sRawDeliveredCount);
+                stats.put("rawKeepalive",            RawLocationProvider.sRawKeepaliveCount);
+                stats.put("fusedDelivered",          RawLocationProvider.sFusedDeliveredCount);
+                stats.put("fusedSuppressed",         RawLocationProvider.sFusedSuppressedCount);
+                stats.put("fusedStaleIgnored",       RawLocationProvider.sFusedStaleIgnoredCount);
+                stats.put("lastDeliveredMs",         lastDeliv);
+                stats.put("lastDeliveredAgeMs",      lastDeliv > 0 ? (now - lastDeliv) : -1);
+                stats.put("lastDeliveredSource",     RawLocationProvider.sLastDeliveredSource);
+                callbackContext.success(stats);
+            } catch (JSONException e) {
+                callbackContext.sendPluginResult(ErrorPluginResult.from("getLocationDispatchStats failed", e, PluginException.JSON_ERROR));
             }
             return true;
         }

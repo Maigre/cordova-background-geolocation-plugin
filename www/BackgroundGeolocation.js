@@ -244,6 +244,18 @@ var BackgroundGeolocation = {
       'getAlarmWakeStats');
   },
 
+  // v2.9.0 Architecture D (Android) — returns the Raw/Fused dedupe dispatch
+  // counters: {fusedAvailable, rawDelivered, rawKeepalive, fusedDelivered,
+  // fusedSuppressed, fusedStaleIgnored, lastDeliveredMs, lastDeliveredAgeMs,
+  // lastDeliveredSource}. lastDeliveredSource ∈ {"raw", "raw-keepalive",
+  // "fused"} echoes the dispatchSource field on the most recent location
+  // delivered to JS. iOS returns nothing meaningful.
+  getLocationDispatchStats: function (success, failure) {
+    return execWithPromise(success,
+      failure,
+      'getLocationDispatchStats');
+  },
+
   on: function (event, callbackFn) {
     assert(this.events.indexOf(event) > -1, [TAG, '#on unknown event "' + event + '"']);
     if (!callbackFn) {
