@@ -375,9 +375,15 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 
 /**
  * BG-3: F-G1 diagnostic — CLLocationManager state snapshot.
- * Returns locationTimestampAge, allowsBackgroundLocationUpdates,
+ * Returns hasLocation, locationTimestampAgeMs, allowsBackgroundLocationUpdates,
  * pausesLocationUpdatesAutomatically, showsBackgroundLocationIndicator,
  * authorizationStatus, locationServicesEnabled.
+ *
+ * v2.8.0: schema clarified — age now reported in ms (NSTimeInterval is seconds
+ * natively, multiplied by 1000); has_location surfaced as a separate bool so
+ * a missing CL location is unambiguous (previously the age field was -1).
+ * locationTimestampAge (seconds, raw NSTimeInterval) is kept for backwards
+ * compatibility with any v2.5.0..v2.7.0 telemetry consumers.
  */
 - (void) getCLState:(CDVInvokedUrlCommand*)command
 {
@@ -385,11 +391,16 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     [self.commandDelegate runInBackground:^{
         CLLocationManager *clm = [MAURLocationManager sharedInstance].locationManager;
         CLAuthorizationStatus authStatus = [CLLocationManager authorizationStatus];
+        BOOL hasLocation = (clm.location != nil);
         NSTimeInterval locationAge = -1;
-        if (clm.location) {
+        double locationAgeMs = -1;
+        if (hasLocation) {
             locationAge = [[NSDate date] timeIntervalSinceDate:clm.location.timestamp];
+            locationAgeMs = locationAge * 1000.0;
         }
         NSDictionary *state = @{
+            @"hasLocation":                        @(hasLocation),
+            @"locationTimestampAgeMs":             @(locationAgeMs),
             @"locationTimestampAge":               @(locationAge),
             @"allowsBackgroundLocationUpdates":    @(clm.allowsBackgroundLocationUpdates),
             @"pausesLocationUpdatesAutomatically": @(clm.pausesLocationUpdatesAutomatically),

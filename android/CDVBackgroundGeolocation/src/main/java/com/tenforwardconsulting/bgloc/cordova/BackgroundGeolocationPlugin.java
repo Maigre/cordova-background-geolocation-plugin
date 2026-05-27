@@ -24,6 +24,7 @@ import com.marianhello.bgloc.cordova.PluginRegistry;
 import com.marianhello.bgloc.cordova.headless.JsEvaluatorTaskRunner;
 import com.marianhello.bgloc.data.BackgroundActivity;
 import com.marianhello.bgloc.data.BackgroundLocation;
+import com.marianhello.bgloc.provider.RawLocationProvider;
 import com.marianhello.logging.LogEntry;
 import com.marianhello.logging.LoggerManager;
 
@@ -71,6 +72,10 @@ public class BackgroundGeolocationPlugin extends CordovaPlugin implements Plugin
     public static final String ACTION_END_TASK = "endTask";
     public static final String ACTION_REGISTER_HEADLESS_TASK = "registerHeadlessTask";
     public static final String ACTION_FORCE_SYNC = "forceSync";
+    // P0.5 Fix 1e (v2.8.0): diagnostic — read the BG-5 AlarmManager wake stats
+    // so the webapp can detect "AlarmManager fired but JS got no fresh callback"
+    // (i.e. WebView suspended despite native keepalive running).
+    public static final String ACTION_GET_ALARM_WAKE_STATS = "getAlarmWakeStats";
 
     private BackgroundGeolocationFacade facade;
 
@@ -364,6 +369,25 @@ public class BackgroundGeolocationPlugin extends CordovaPlugin implements Plugin
         } else if (ACTION_FORCE_SYNC.equals(action)) {
             logger.debug("Forced location sync requested");
             facade.forceSync();
+            return true;
+        } else if (ACTION_GET_ALARM_WAKE_STATS.equals(action)) {
+            // P0.5 Fix 1e (v2.8.0) — return the BG-5 wake-receiver counters.
+            // ageMs fields are computed at call time so JS doesn't need to
+            // bridge System.currentTimeMillis().
+            try {
+                JSONObject stats = new JSONObject();
+                long now = System.currentTimeMillis();
+                long lastFire = RawLocationProvider.sLastAlarmFireMs;
+                long lastDeliv = RawLocationProvider.sLastCachedDeliveredMs;
+                stats.put("count", RawLocationProvider.sAlarmFireCount);
+                stats.put("lastFireMs", lastFire);
+                stats.put("lastFireAgeMs", lastFire > 0 ? (now - lastFire) : -1);
+                stats.put("lastCachedDeliveredMs", lastDeliv);
+                stats.put("lastCachedDeliveredAgeMs", lastDeliv > 0 ? (now - lastDeliv) : -1);
+                callbackContext.success(stats);
+            } catch (JSONException e) {
+                callbackContext.sendPluginResult(ErrorPluginResult.from("getAlarmWakeStats failed", e, PluginException.JSON_ERROR));
+            }
             return true;
         }
 

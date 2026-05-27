@@ -39,6 +39,15 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
     // BG-5: AlarmManager action — wakes the provider even in Doze.
     private static final String ALARM_WAKE_ACTION = "com.marianhello.bgloc.RAW_LOCATION_WAKE";
 
+    // P0.5 Fix 1e (v2.8.0) — diagnostic counters readable from JS via the
+    // CDV action getAlarmWakeStats. Lets the webapp tell whether the
+    // AlarmManager wake-receiver is firing during Doze while JS appears
+    // suspended (i.e. the JS-side real_callback_freshness shows no fresh
+    // callbacks but these counters keep growing).
+    public static volatile long sAlarmFireCount = 0;
+    public static volatile long sLastAlarmFireMs = 0;
+    public static volatile long sLastCachedDeliveredMs = 0;
+
     private LocationManager locationManager;
     private String provider;
     private boolean isStarted = false;
@@ -58,11 +67,17 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
      * BG-5: AlarmManager keepalive receiver — fires via setExactAndAllowWhileIdle even in Doze.
      * Re-delivers last known location if real callbacks have been silent for >= KEEPALIVE_INTERVAL_MS.
      * Effective Doze cadence is ~9 min on Android 9+; non-Doze cadence is ALARM_INTERVAL_MS (30 s).
+     *
+     * v2.8.0: also bumps diagnostic counters (sAlarmFireCount, sLastAlarmFireMs,
+     * sLastCachedDeliveredMs) so the webapp can detect a JS-suspended-despite-
+     * alarm pattern via the getAlarmWakeStats CDV action.
      */
     private class LocationWakeReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (!isStarted) return;
+            sAlarmFireCount++;
+            sLastAlarmFireMs = System.currentTimeMillis();
             scheduleNextAlarm();
             long elapsed = SystemClock.elapsedRealtime() - _lastRealLocationTime;
             if (elapsed >= KEEPALIVE_INTERVAL_MS) {
@@ -70,6 +85,7 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
                 if (cached != null) {
                     logger.debug("AlarmWake: {}ms gap, device {} — delivering cached position",
                         elapsed, _deviceIsStationary ? "stationary" : "moving");
+                    sLastCachedDeliveredMs = System.currentTimeMillis();
                     handleLocation(cached);
                 }
             }

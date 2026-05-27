@@ -233,6 +233,17 @@ var BackgroundGeolocation = {
       'forceReacquire');
   },
 
+  // P0.5 Fix 1e (v2.8.0) — Android-only diagnostic. Returns the BG-5
+  // AlarmManager wake-receiver counters: {count, lastFireMs, lastFireAgeMs,
+  // lastCachedDeliveredMs, lastCachedDeliveredAgeMs}. iOS returns 0s.
+  // Poll periodically and compare against real_callback_freshness to detect
+  // "alarm fired but JS got no fresh callback" (WebView Doze suspension).
+  getAlarmWakeStats: function (success, failure) {
+    return execWithPromise(success,
+      failure,
+      'getAlarmWakeStats');
+  },
+
   on: function (event, callbackFn) {
     assert(this.events.indexOf(event) > -1, [TAG, '#on unknown event "' + event + '"']);
     if (!callbackFn) {
