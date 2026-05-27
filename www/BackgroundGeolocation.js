@@ -225,6 +225,14 @@ var BackgroundGeolocation = {
       'getPowerState');
   },
 
+  // BG-2: D3 — force CLLocationManager stop/restart when real callbacks stall (iOS only).
+  // Throttle to max 3 calls/session from JS; native auto-trigger (BG-10) also observes this limit.
+  forceReacquire: function (success, failure) {
+    return execWithPromise(success,
+      failure,
+      'forceReacquire');
+  },
+
   on: function (event, callbackFn) {
     assert(this.events.indexOf(event) > -1, [TAG, '#on unknown event "' + event + '"']);
     if (!callbackFn) {

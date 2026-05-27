@@ -1,5 +1,6 @@
 package com.marianhello.bgloc.provider;
 
+import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -33,7 +34,10 @@ import com.marianhello.logging.LoggerManager;
 public class RawLocationProvider extends AbstractLocationProvider implements LocationListener {
     private static final long KEEPALIVE_INTERVAL_MS = 15_000;
     private static final long ACTIVITY_INTERVAL_MS  = 5_000;
-    private static final String ACTIVITY_ACTION = "com.marianhello.bgloc.RAW_ACTIVITY_UPDATE";
+    private static final long ALARM_INTERVAL_MS     = 30_000;
+    private static final String ACTIVITY_ACTION  = "com.marianhello.bgloc.RAW_ACTIVITY_UPDATE";
+    // BG-5: AlarmManager action — wakes the provider even in Doze.
+    private static final String ALARM_WAKE_ACTION = "com.marianhello.bgloc.RAW_LOCATION_WAKE";
 
     private LocationManager locationManager;
     private String provider;
@@ -46,6 +50,44 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
     private PendingIntent    _activityPI;
     private ActivityUpdateReceiver _activityReceiver;
     private boolean          _deviceIsStationary = false;
+
+    private PendingIntent       _alarmPI;
+    private LocationWakeReceiver _alarmReceiver;
+
+    /**
+     * BG-5: AlarmManager keepalive receiver — fires via setExactAndAllowWhileIdle even in Doze.
+     * Re-delivers last known location if real callbacks have been silent for >= KEEPALIVE_INTERVAL_MS.
+     * Effective Doze cadence is ~9 min on Android 9+; non-Doze cadence is ALARM_INTERVAL_MS (30 s).
+     */
+    private class LocationWakeReceiver extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!isStarted) return;
+            scheduleNextAlarm();
+            long elapsed = SystemClock.elapsedRealtime() - _lastRealLocationTime;
+            if (elapsed >= KEEPALIVE_INTERVAL_MS) {
+                Location cached = locationManager.getLastKnownLocation(provider);
+                if (cached != null) {
+                    logger.debug("AlarmWake: {}ms gap, device {} — delivering cached position",
+                        elapsed, _deviceIsStationary ? "stationary" : "moving");
+                    handleLocation(cached);
+                }
+            }
+        }
+    }
+
+    private void scheduleNextAlarm() {
+        AlarmManager am = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
+        if (am == null) return;
+        Intent intent = new Intent(ALARM_WAKE_ACTION);
+        intent.setPackage(mContext.getPackageName());
+        int piFlags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE
+            : PendingIntent.FLAG_UPDATE_CURRENT;
+        _alarmPI = PendingIntent.getBroadcast(mContext, 9004, intent, piFlags);
+        am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SystemClock.elapsedRealtime() + ALARM_INTERVAL_MS, _alarmPI);
+    }
 
     private class ActivityUpdateReceiver extends BroadcastReceiver {
         @Override
@@ -128,6 +170,11 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
             };
             _keepaliveHandler.postDelayed(_keepaliveTick, KEEPALIVE_INTERVAL_MS);
 
+            // BG-5: Register AlarmManager keepalive receiver and fire first alarm.
+            _alarmReceiver = new LocationWakeReceiver();
+            mContext.registerReceiver(_alarmReceiver, new IntentFilter(ALARM_WAKE_ACTION));
+            scheduleNextAlarm();
+
             if (activityRecognitionPermitted()) {
                 _activityReceiver = new ActivityUpdateReceiver();
                 mContext.registerReceiver(_activityReceiver, new IntentFilter(ACTIVITY_ACTION));
@@ -154,6 +201,15 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
         if (_keepaliveHandler != null) {
             _keepaliveHandler.removeCallbacks(_keepaliveTick);
             _keepaliveHandler = null;
+        }
+        if (_alarmPI != null) {
+            AlarmManager am = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
+            if (am != null) am.cancel(_alarmPI);
+            _alarmPI = null;
+        }
+        if (_alarmReceiver != null) {
+            try { mContext.unregisterReceiver(_alarmReceiver); } catch (Exception ignored) {}
+            _alarmReceiver = null;
         }
         if (_activityPI != null) {
             ActivityRecognition.getClient(mContext).removeActivityUpdates(_activityPI);

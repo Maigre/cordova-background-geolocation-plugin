@@ -16,6 +16,10 @@
 static NSString * const TAG = @"RawLocationProvider";
 static NSString * const Domain = @"com.marianhello";
 
+// BG-10: CLLocationManagerDelegate conformance for the dedicated SLC monitor instance.
+@interface MAURRawLocationProvider () <CLLocationManagerDelegate>
+@end
+
 @implementation MAURRawLocationProvider {
 
     BOOL isStarted;
@@ -26,6 +30,11 @@ static NSString * const Domain = @"com.marianhello";
     NSDate  *_lastRealLocationTime;
     CMMotionActivityManager *_motionActivityManager;
     BOOL _deviceIsStationary;
+
+    // BG-10: separate CLLocationManager for SLC — tracks delivery independently from standard updates.
+    CLLocationManager *_slcManager;
+    NSDate            *_lastSLCLocationTime;
+    NSInteger          _forceReacquireCount; // throttle: max 3 auto-reacquires per session
 }
 
 - (instancetype) init
@@ -66,6 +75,7 @@ static NSString * const Domain = @"com.marianhello";
         if (isStarted) {
             [locationManager setShowsBackgroundLocationIndicator:YES];
             _lastRealLocationTime = [NSDate date];
+            _forceReacquireCount = 0;
             [_keepaliveTimer invalidate];
             _keepaliveTimer = [NSTimer scheduledTimerWithTimeInterval:15.0
                                                                target:self
@@ -73,6 +83,17 @@ static NSString * const Domain = @"com.marianhello";
                                                              userInfo:nil
                                                               repeats:YES];
         }
+    }
+
+    // BG-10: start SLC as a parallel monitor to detect when standard callbacks stall.
+    if (isStarted && _slcManager == nil) {
+        _slcManager = [[CLLocationManager alloc] init];
+        _slcManager.delegate = self;
+        if (@available(iOS 9.0, *)) {
+            _slcManager.allowsBackgroundLocationUpdates = YES;
+        }
+        [_slcManager startMonitoringSignificantLocationChanges];
+        DDLogDebug(@"%@ SLC monitor started", TAG);
     }
 
     // Always (re-)start motion updates when the manager is not yet running.
@@ -97,6 +118,14 @@ static NSString * const Domain = @"com.marianhello";
 
     [_keepaliveTimer invalidate];
     _keepaliveTimer = nil;
+
+    // BG-10: stop the SLC parallel monitor.
+    if (_slcManager) {
+        [_slcManager stopMonitoringSignificantLocationChanges];
+        _slcManager.delegate = nil;
+        _slcManager = nil;
+        _lastSLCLocationTime = nil;
+    }
 
     [_motionActivityManager stopActivityUpdates];
     _motionActivityManager = nil;
@@ -150,6 +179,53 @@ static NSString * const Domain = @"com.marianhello";
     if (clm) {
         clm.allowsBackgroundLocationUpdates = YES;
         clm.pausesLocationUpdatesAutomatically = NO;
+    }
+
+    // BG-10: D5 — if real callbacks stalled >90 s but SLC is fresh (<30 s), auto-reacquire.
+    NSTimeInterval realAge = -[_lastRealLocationTime timeIntervalSinceNow];
+    NSTimeInterval slcAge  = _lastSLCLocationTime
+        ? -[_lastSLCLocationTime timeIntervalSinceNow] : 9999.0;
+    if (realAge > 90.0 && slcAge < 30.0 && _forceReacquireCount < 3) {
+        _forceReacquireCount++;
+        DDLogInfo(@"%@ BG-10: real stalled %.0fs, SLC fresh %.0fs — auto-reacquire #%ld",
+                  TAG, realAge, slcAge, (long)_forceReacquireCount);
+        [self _doForceReacquire];
+    }
+}
+
+/**
+ * BG-10: private CLLocationManager restart used by auto-reacquire trigger.
+ * Also called indirectly via the forceReacquire Cordova action (BG-2),
+ * which duplicates this logic at the CDVBackgroundGeolocation layer.
+ */
+- (void) _doForceReacquire
+{
+    CLLocationManager *clm = locationManager.locationManager;
+    if (!clm) return;
+    [clm stopUpdatingLocation];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!isStarted) return;
+        clm.allowsBackgroundLocationUpdates = YES;
+        clm.pausesLocationUpdatesAutomatically = NO;
+        clm.showsBackgroundLocationIndicator = YES;
+        [clm startUpdatingLocation];
+        DDLogInfo(@"%@ _doForceReacquire: CLLocationManager restarted", TAG);
+    });
+}
+
+/**
+ * BG-10: CLLocationManagerDelegate for _slcManager. Tracks SLC delivery independently
+ * from standard startUpdatingLocation callbacks — allows detecting when standard
+ * callbacks stall while SLC still delivers (P1.34 iOS background-GPS blackout).
+ */
+- (void)locationManager:(CLLocationManager *)manager
+     didUpdateLocations:(NSArray<CLLocation *> *)locations
+{
+    if (manager == _slcManager && locations.lastObject) {
+        _lastSLCLocationTime = [NSDate date];
+        DDLogDebug(@"%@ SLC delivered (age %.0fs)",
+                   TAG, -[locations.lastObject.timestamp timeIntervalSinceNow]);
     }
 }
 

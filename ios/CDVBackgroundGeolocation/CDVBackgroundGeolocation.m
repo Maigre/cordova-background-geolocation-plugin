@@ -350,6 +350,30 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 }
 
 /**
+ * BG-2: D3 — force CLLocationManager stop/restart to recover from iOS 26.3.x callback stall.
+ * Throttling (max 3/session) is enforced in MAURRawLocationProvider._keepaliveTick auto-trigger.
+ * When called directly from JS the caller is responsible for rate-limiting.
+ */
+- (void) forceReacquire:(CDVInvokedUrlCommand*)command
+{
+    NSLog(@"%@ #%@", TAG, @"forceReacquire");
+    CLLocationManager *clm = [MAURLocationManager sharedInstance].locationManager;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [clm stopUpdatingLocation];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)),
+                       dispatch_get_main_queue(), ^{
+            clm.allowsBackgroundLocationUpdates = YES;
+            clm.pausesLocationUpdatesAutomatically = NO;
+            clm.showsBackgroundLocationIndicator = YES;
+            [clm startUpdatingLocation];
+            NSLog(@"%@ forceReacquire: CLLocationManager restarted", TAG);
+            CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+            [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+        });
+    });
+}
+
+/**
  * BG-3: F-G1 diagnostic — CLLocationManager state snapshot.
  * Returns locationTimestampAge, allowsBackgroundLocationUpdates,
  * pausesLocationUpdatesAutomatically, showsBackgroundLocationIndicator,
