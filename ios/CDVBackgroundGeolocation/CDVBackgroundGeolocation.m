@@ -14,6 +14,7 @@
 #import "MAURConfig.h"
 #import "MAURBackgroundGeolocationFacade.h"
 #import "MAURBackgroundTaskManager.h"
+#import "MAURLocationManager.h"
 
 static NSString * const TAG = @"CDVBackgroundGeolocation";
 
@@ -42,6 +43,9 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppResume:) name:UIApplicationWillEnterForegroundNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onFinishLaunching:) name:UIApplicationDidFinishLaunchingNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppTerminate:) name:UIApplicationWillTerminateNotification object:nil];
+
+    // BG-4: enable battery monitoring once so getPowerState can read batteryLevel/batteryState.
+    [UIDevice currentDevice].batteryMonitoringEnabled = YES;
 }
 
 /*
@@ -342,6 +346,51 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 {
     [facade forceSync];
     CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+    [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+}
+
+/**
+ * BG-3: F-G1 diagnostic — CLLocationManager state snapshot.
+ * Returns locationTimestampAge, allowsBackgroundLocationUpdates,
+ * pausesLocationUpdatesAutomatically, showsBackgroundLocationIndicator,
+ * authorizationStatus, locationServicesEnabled.
+ */
+- (void) getCLState:(CDVInvokedUrlCommand*)command
+{
+    NSLog(@"%@ #%@", TAG, @"getCLState");
+    [self.commandDelegate runInBackground:^{
+        CLLocationManager *clm = [MAURLocationManager sharedInstance].locationManager;
+        CLAuthorizationStatus authStatus = [CLLocationManager authorizationStatus];
+        NSTimeInterval locationAge = -1;
+        if (clm.location) {
+            locationAge = [[NSDate date] timeIntervalSinceDate:clm.location.timestamp];
+        }
+        NSDictionary *state = @{
+            @"locationTimestampAge":               @(locationAge),
+            @"allowsBackgroundLocationUpdates":    @(clm.allowsBackgroundLocationUpdates),
+            @"pausesLocationUpdatesAutomatically": @(clm.pausesLocationUpdatesAutomatically),
+            @"showsBackgroundLocationIndicator":   @(clm.showsBackgroundLocationIndicator),
+            @"authorizationStatus":                @(authStatus),
+            @"locationServicesEnabled":            @([CLLocationManager locationServicesEnabled]),
+        };
+        CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:state];
+        [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+    }];
+}
+
+/**
+ * BG-4: Power state snapshot — low-power mode, battery level and state.
+ */
+- (void) getPowerState:(CDVInvokedUrlCommand*)command
+{
+    NSLog(@"%@ #%@", TAG, @"getPowerState");
+    UIDevice *device = [UIDevice currentDevice];
+    NSDictionary *state = @{
+        @"lowPowerMode": @([[NSProcessInfo processInfo] isLowPowerModeEnabled]),
+        @"batteryLevel": @(device.batteryLevel),
+        @"batteryState": @((NSInteger)device.batteryState),
+    };
+    CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:state];
     [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
 }
 

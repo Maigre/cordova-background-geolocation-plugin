@@ -144,6 +144,13 @@ static NSString * const Domain = @"com.marianhello";
                _deviceIsStationary ? @"stationary (expected)" : @"moving (GPS signal loss)");
     MAURLocation *bgloc = [MAURLocation fromCLLocation:cached];
     [self.delegate onLocationChanged:bgloc];
+
+    // BG-7: D4 defensive re-assertion — iOS can silently flip these flags under memory pressure.
+    CLLocationManager *clm = locationManager.locationManager;
+    if (clm) {
+        clm.allowsBackgroundLocationUpdates = YES;
+        clm.pausesLocationUpdatesAutomatically = NO;
+    }
 }
 
 - (void) onError:(NSError*)error

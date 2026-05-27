@@ -211,6 +211,20 @@ var BackgroundGeolocation = {
       'forceSync');
   },
 
+  // BG-3: F-G1 diagnostic — CLLocationManager state snapshot (iOS only).
+  getCLState: function (success, failure) {
+    return execWithPromise(success,
+      failure,
+      'getCLState');
+  },
+
+  // BG-4: Power state snapshot — lowPowerMode, batteryLevel, batteryState (iOS only).
+  getPowerState: function (success, failure) {
+    return execWithPromise(success,
+      failure,
+      'getPowerState');
+  },
+
   on: function (event, callbackFn) {
     assert(this.events.indexOf(event) > -1, [TAG, '#on unknown event "' + event + '"']);
     if (!callbackFn) {
