@@ -8,6 +8,7 @@
 
 #import <Foundation/Foundation.h>
 #import <CoreMotion/CoreMotion.h>
+#import <UIKit/UIKit.h>
 #import "MAURRawLocationProvider.h"
 #import "MAURLocationManager.h"
 #import "MAURActivity.h"
@@ -172,7 +173,25 @@ static NSString * const Domain = @"com.marianhello";
                TAG, -[_lastRealLocationTime timeIntervalSinceNow],
                _deviceIsStationary ? @"stationary (expected)" : @"moving (GPS signal loss)");
     MAURLocation *bgloc = [MAURLocation fromCLLocation:cached];
+    // F-G4: tag this as a keepalive tick (NSTimer source, not a real CLLocationManager callback).
+    bgloc.isKeepalive = YES;
+    // F-G3: start a short background task and include its ID so post-hoc telemetry
+    //        can correlate keepalive firings with task-expiry events.
+    __block UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
+    bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithName:@"flanerie.keepalive"
+                                                          expirationHandler:^{
+        [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+        bgTask = UIBackgroundTaskInvalid;
+    }];
+    bgloc.bgTaskId = (bgTask != UIBackgroundTaskInvalid) ? @(bgTask) : nil;
     [self.delegate onLocationChanged:bgloc];
+    // End the background task shortly after dispatching — we only need it to cover the callback.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (bgTask != UIBackgroundTaskInvalid) {
+            [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+        }
+    });
 
     // BG-7: D4 defensive re-assertion — iOS can silently flip these flags under memory pressure.
     CLLocationManager *clm = locationManager.locationManager;
@@ -226,6 +245,46 @@ static NSString * const Domain = @"com.marianhello";
         _lastSLCLocationTime = [NSDate date];
         DDLogDebug(@"%@ SLC delivered (age %.0fs)",
                    TAG, -[locations.lastObject.timestamp timeIntervalSinceNow]);
+    }
+}
+
+/**
+ * F-G1: CLLocationManagerDelegate for _slcManager — fires when iOS changes the
+ * location authorization status during an active walk.  The main CLLocationManager's
+ * auth changes are handled upstream by MAURLocationManager; this catches any change
+ * reported to _slcManager (same process, same permission — fires in parallel).
+ * We forward to the delegation chain and also log the raw CLAuthorizationStatus
+ * so post-hoc telemetry analysis gets the full iOS value (not just the simplified enum).
+ */
+- (void)locationManager:(CLLocationManager *)manager
+    didChangeAuthorizationStatus:(CLAuthorizationStatus)status
+{
+    if (manager != _slcManager) return; // main manager handled by MAURLocationManager
+    DDLogInfo(@"%@ F-G1: SLC manager auth changed: %d", TAG, (int)status);
+    MAURLocationAuthorizationStatus mappedStatus;
+    switch (status) {
+        case kCLAuthorizationStatusRestricted:
+        case kCLAuthorizationStatusDenied:
+            mappedStatus = MAURLocationAuthorizationDenied;
+            break;
+        case kCLAuthorizationStatusAuthorizedAlways:
+            mappedStatus = MAURLocationAuthorizationAllowed;
+            break;
+        case kCLAuthorizationStatusAuthorizedWhenInUse:
+            mappedStatus = MAURLocationAuthorizationForeground;
+            break;
+        default:
+            mappedStatus = MAURLocationAuthorizationNotDetermined;
+            break;
+    }
+    [self.delegate onAuthorizationChanged:mappedStatus];
+}
+
+- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager
+    API_AVAILABLE(ios(14.0))
+{
+    if (manager == _slcManager) {
+        [self locationManager:manager didChangeAuthorizationStatus:manager.authorizationStatus];
     }
 }
 

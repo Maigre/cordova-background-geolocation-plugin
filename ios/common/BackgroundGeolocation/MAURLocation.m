@@ -70,7 +70,7 @@ MAURLocation* _location;
 
 @implementation MAURLocation
 
-@synthesize locationId, time, accuracy, altitudeAccuracy, speed, heading, altitude, latitude, longitude, provider, locationProvider, radius, isValid, recordedAt;
+@synthesize locationId, time, accuracy, altitudeAccuracy, speed, heading, altitude, latitude, longitude, provider, locationProvider, radius, isValid, recordedAt, isKeepalive, bgTaskId;
 
 + (instancetype) fromCLLocation:(CLLocation*)location;
 {
@@ -162,6 +162,14 @@ MAURLocation* _location;
     if (locationProvider != nil) [dict setObject:locationProvider forKey:@"locationProvider"];
     if (radius != nil) [dict setObject:radius forKey:@"radius"];
     if (recordedAt != nil) [dict setObject:[NSNumber numberWithDouble:([recordedAt timeIntervalSince1970] * 1000)] forKey:@"recordedAt"];
+    // F-G4: tag keepalive-sourced locations so JS can distinguish them from real CLLocationManager callbacks.
+    if (isKeepalive) {
+        [dict setObject:@YES forKey:@"is_keepalive"];
+        // F-G3: include background task ID so post-hoc analysis can correlate with task expiry events.
+        if (bgTaskId != nil) {
+            [dict setObject:bgTaskId forKey:@"bg_task_id"];
+        }
+    }
 
     return dict;
 }
@@ -341,6 +349,8 @@ MAURLocation* _location;
         copy.locationProvider = locationProvider;
         copy.radius = radius;
         copy.isValid = isValid;
+        copy.isKeepalive = isKeepalive;
+        copy.bgTaskId = bgTaskId;
     }
 
     return copy;

@@ -38,6 +38,11 @@ typedef NS_ENUM(NSInteger, MAURLocationStatus) {
 @property (nonatomic) BOOL isValid;
 @property (nonatomic, retain) NSDate *recordedAt;
 
+// F-G4: set to YES when this location came from the NSTimer keepalive tick (not a real CLLocationManager callback).
+@property (nonatomic) BOOL isKeepalive;
+// F-G3: UIBackgroundTaskIdentifier started in the keepalive tick; nil when not a keepalive.
+@property (nonatomic, retain) NSNumber *bgTaskId;
+
 + (instancetype) fromCLLocation:(CLLocation*)location;
 + (NSTimeInterval) locationAge:(CLLocation*)location;
 + (NSMutableDictionary*) toDictionary:(CLLocation*)location;
