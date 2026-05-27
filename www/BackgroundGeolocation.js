@@ -14,6 +14,9 @@ var channel = require('cordova/channel');
 var radio = require('./radio');
 var TAG = 'CDVBackgroundGeolocation';
 
+// Flanerie keeps the upstream JS API stable and carries its walk-specific
+// behavior mainly in native providers and platform wiring.
+
 var assert = function (condition, msgArray) {
   if (!condition) {
       throw new Error(msgArray.join('') || 'Assertion failed');
