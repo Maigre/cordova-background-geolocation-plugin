@@ -55,6 +55,12 @@ typedef NS_ENUM(NSInteger, MAUROperationalMode) {
 // remains owned by the polygon-based zone check.
 - (void) onRegionWake:(NSDictionary*)payload;
 
+// BG-11 (v2.10.0+): iOS CLLocationManager rejected a rail region after it
+// was submitted to startMonitoringForRegion: — e.g. exceeded the 20-region
+// system cap, or revoked entitlements mid-walk. Payload carries region_id,
+// error_code, error_domain, error. Telemetry-only on the JS side.
+- (void) onRegionMonitorFail:(NSDictionary*)payload;
+
 // BG-12 (v2.11.0): iOS CLVisit fired. Payload carries latitude, longitude,
 // horizontal_accuracy_m, arrival_date, departure_date (ISO 8601, may be
 // null while still at the visited place), arrival_age_ms, departure_known.

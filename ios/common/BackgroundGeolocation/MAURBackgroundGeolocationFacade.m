@@ -622,13 +622,13 @@ FMDBLogger *sqliteLogger;
 
 #pragma mark - BG-11 rail passthrough
 
-- (BOOL) configureRail:(NSArray<NSDictionary*>*)regions
+- (NSInteger) configureRail:(NSArray<NSDictionary*>*)regions
 {
     if ([locationProvider isKindOfClass:[MAURRawLocationProvider class]]) {
         return [(MAURRawLocationProvider*)locationProvider configureRail:regions];
     }
     DDLogWarn(@"%@ configureRail: active provider is not Raw — rail not applied", TAG);
-    return NO;
+    return -1;
 }
 
 - (void) clearRail
@@ -649,6 +649,13 @@ FMDBLogger *sqliteLogger;
 {
     if (_delegate && [_delegate respondsToSelector:@selector(onVisit:)]) {
         [_delegate onVisit:payload];
+    }
+}
+
+- (void) onRegionMonitorFail:(NSDictionary*)payload
+{
+    if (_delegate && [_delegate respondsToSelector:@selector(onRegionMonitorFail:)]) {
+        [_delegate onRegionMonitorFail:payload];
     }
 }
 

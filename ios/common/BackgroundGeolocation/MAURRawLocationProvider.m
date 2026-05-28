@@ -49,8 +49,9 @@ static NSString * const Domain = @"com.marianhello";
     // visit delegate callbacks land here with a known sender identity. The
     // emitted gps_visit_event is observation-only telemetry: iOS infers when
     // the user "stopped" somewhere; we measure whether that detection is
-    // reliable enough to eventually power a step-confirm signal (decided per
-    // ios-native-plan §5 Option B).
+    // reliable enough to eventually power a step-confirm signal (Workstream L
+    // decision 5 Option B in mobile-audit.md, scope reduced at implementation
+    // time — CLMonitor proper deferred indefinitely).
     CLLocationManager           *_visitManager;
 }
 
@@ -311,13 +312,21 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
  * the new one. Called from CDVBackgroundGeolocation.configureRail (which
  * forwards from JS at parcours entry).
  */
-- (BOOL) configureRail:(NSArray<NSDictionary*>*)regions
+- (NSInteger) configureRail:(NSArray<NSDictionary*>*)regions
 {
     if (![CLLocationManager isMonitoringAvailableForClass:[CLCircularRegion class]]) {
         DDLogWarn(@"%@ BG-11: region monitoring not available on this device", TAG);
-        return NO;
+        return -1;
     }
 
+    // Run the registration block synchronously on the main thread so we can
+    // return the authoritative count of regions that actually passed
+    // validation AND were submitted to startMonitoringForRegion:. Returning
+    // input regions.count here would be optimistic — JS-side telemetry
+    // (gps_rail_configured.region_count) would say "16 configured" even if
+    // some specs were malformed or rejected. Per-region OS-level failures
+    // after this point still arrive asynchronously via
+    // monitoringDidFailForRegion: → onRegionMonitorFail:.
     dispatch_block_t work = ^{
         // Lazy-init the rail-dedicated CLLocationManager. Separate from the
         // standard-updates and SLC managers so its delegate callbacks land
@@ -358,8 +367,8 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
         }
         DDLogInfo(@"%@ BG-11: rail configured with %lu regions", TAG, (unsigned long)self->_railRegions.count);
     };
-    if ([NSThread isMainThread]) work(); else dispatch_async(dispatch_get_main_queue(), work);
-    return YES;
+    if ([NSThread isMainThread]) work(); else dispatch_sync(dispatch_get_main_queue(), work);
+    return (NSInteger)_railRegions.count;
 }
 
 - (void) clearRail
@@ -406,6 +415,15 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
     if (manager != _railManager) return;
     DDLogWarn(@"%@ BG-11: rail region %@ monitoring failed: %@",
               TAG, region.identifier, error.localizedDescription);
+    NSDictionary *payload = @{
+        @"region_id":   region.identifier ?: @"",
+        @"error_code":  @(error.code),
+        @"error_domain": error.domain ?: @"",
+        @"error":       error.localizedDescription ?: @"",
+    };
+    if (self.delegate && [self.delegate respondsToSelector:@selector(onRegionMonitorFail:)]) {
+        [self.delegate onRegionMonitorFail:payload];
+    }
 }
 
 #pragma mark - BG-12 visit monitoring
@@ -413,9 +431,10 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
 /**
  * BG-12: CLLocationManagerDelegate for _visitManager. CLVisit fires when iOS
  * infers the user has arrived at and/or departed from a place. Observation-
- * only: forwarded to JS as a `visit` event for telemetry. Decision 5 Option B
- * in ios-native-plan.md — measure whether visit detection correlates with
- * actual step dwell time before considering it as a step-confirm signal.
+ * only: forwarded to JS as a `visit` event for telemetry. Workstream L
+ * decision 5 Option B in mobile-audit.md — measure whether visit detection
+ * correlates with actual step dwell time before considering it as a
+ * step-confirm signal.
  *
  * Apple sentinel: a CLVisit with `departureDate == NSDate distantFuture`
  * indicates the user is still at the visited place; both arrival and

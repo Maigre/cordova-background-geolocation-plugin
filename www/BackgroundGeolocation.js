@@ -65,6 +65,11 @@ var BackgroundGeolocation = {
     // listener — payload {region_id, event, last_real_callback_age_ms,
     // did_force_reacquire, force_reacquire_count, app_state, bg_task_id}.
     'region_wake',
+    // BG-11 (iOS): CLLocationManager rejected a rail region after it was
+    // submitted to startMonitoringForRegion: (e.g. 20-region system cap
+    // exceeded, or entitlements revoked mid-walk). Payload {region_id,
+    // error_code, error_domain, error}. Telemetry-only.
+    'region_monitor_fail',
     // BG-12 (v2.11.0, iOS): CLVisit fired — payload {latitude, longitude,
     // horizontal_accuracy_m, arrival_date, departure_date, arrival_age_ms,
     // departure_known}. Observation-only telemetry of iOS "user stopped"

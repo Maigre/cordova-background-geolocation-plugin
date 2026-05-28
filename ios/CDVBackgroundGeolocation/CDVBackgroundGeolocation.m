@@ -441,9 +441,9 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     NSArray *regions = (command.arguments.count > 0 && [command.arguments[0] isKindOfClass:[NSArray class]])
         ? command.arguments[0] : @[];
     [self.commandDelegate runInBackground:^{
-        BOOL ok = [self->facade configureRail:regions];
-        CDVPluginResult *result = ok
-            ? [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsInt:(int)regions.count]
+        NSInteger count = [self->facade configureRail:regions];
+        CDVPluginResult *result = (count >= 0)
+            ? [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsInt:(int)count]
             : [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
                                 messageAsString:@"region monitoring unavailable"];
         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
@@ -589,6 +589,16 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 {
     NSLog(@"%@ #%@ acc=%@m", TAG, @"onVisit", payload[@"horizontal_accuracy_m"]);
     [self sendEvent:@"visit" result:payload];
+}
+
+// BG-11: CLLocationManager rejected a rail region post-registration.
+// Forwarded to JS as `region_monitor_fail` so the webapp can log it to
+// telemetry — makes gps_rail_configured.region_count auditable against the
+// count of regions the OS actually rejected after the fact.
+- (void) onRegionMonitorFail:(NSDictionary*)payload
+{
+    NSLog(@"%@ #%@ %@", TAG, @"onRegionMonitorFail", payload[@"region_id"]);
+    [self sendEvent:@"region_monitor_fail" result:payload];
 }
 
 - (void) onError:(NSError*)error

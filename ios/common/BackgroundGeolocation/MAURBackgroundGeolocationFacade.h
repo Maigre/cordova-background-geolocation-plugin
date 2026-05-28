@@ -45,9 +45,11 @@
 - (void) onAppTerminate;
 
 // BG-11 (v2.10.0): GPS rail of wake-up regions. iOS-only — forwarded to the
-// MAURRawLocationProvider instance when the active provider is Raw. No-op
-// (returns NO) on other providers. See MAURRawLocationProvider#configureRail.
-- (BOOL) configureRail:(NSArray<NSDictionary*>*)regions;
+// MAURRawLocationProvider instance when the active provider is Raw.
+// Returns the authoritative count of regions submitted to
+// startMonitoringForRegion:, or -1 if rail monitoring is unavailable / the
+// active provider is not Raw. See MAURRawLocationProvider#configureRail.
+- (NSInteger) configureRail:(NSArray<NSDictionary*>*)regions;
 - (void) clearRail;
 
 
