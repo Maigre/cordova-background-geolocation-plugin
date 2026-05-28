@@ -429,6 +429,41 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
 }
 
+/**
+ * BG-11 (v2.10.0): configure the GPS rail of wake-up CLCircularRegions.
+ * Accepts an array of {id, lat, lon, radius} dictionaries. Replaces any
+ * previously-registered set. Called from JS at parcours entry once the
+ * rail is computed from step centroid midpoints.
+ */
+- (void) configureRail:(CDVInvokedUrlCommand*)command
+{
+    NSLog(@"%@ #%@", TAG, @"configureRail");
+    NSArray *regions = (command.arguments.count > 0 && [command.arguments[0] isKindOfClass:[NSArray class]])
+        ? command.arguments[0] : @[];
+    [self.commandDelegate runInBackground:^{
+        BOOL ok = [self->facade configureRail:regions];
+        CDVPluginResult *result = ok
+            ? [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsInt:(int)regions.count]
+            : [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
+                                messageAsString:@"region monitoring unavailable"];
+        [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+    }];
+}
+
+/**
+ * BG-11: stop monitoring all rail regions. Called from JS at parcours
+ * cleanup (page exit, walk end, rearm).
+ */
+- (void) clearRail:(CDVInvokedUrlCommand*)command
+{
+    NSLog(@"%@ #%@", TAG, @"clearRail");
+    [self.commandDelegate runInBackground:^{
+        [self->facade clearRail];
+        CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+        [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+    }];
+}
+
 - (void) addEventListener:(CDVInvokedUrlCommand*)command
 {
     callbackId = command.callbackId;
@@ -537,6 +572,15 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 {
     NSLog(@"%@ #%@", TAG, @"onActivityChanged");
     [self sendEvent:@"activity" result:[activity toDictionary]];
+}
+
+// BG-11 (v2.10.0): rail of wake-up regions fired. Forwarded to JS through
+// the existing addEventListener channel as a `region_wake` event so the
+// webapp can log it to telemetry without any new bridge plumbing.
+- (void) onRegionWake:(NSDictionary*)payload
+{
+    NSLog(@"%@ #%@ %@", TAG, @"onRegionWake", payload[@"event"]);
+    [self sendEvent:@"region_wake" result:payload];
 }
 
 - (void) onError:(NSError*)error

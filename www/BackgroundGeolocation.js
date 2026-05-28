@@ -60,7 +60,11 @@ var BackgroundGeolocation = {
     'foreground',
     'background',
     'abort_requested',
-    'http_authorization'
+    'http_authorization',
+    // BG-11 (v2.10.0, iOS): rail of CLCircularRegion wake-ups fired the
+    // listener — payload {region_id, event, last_real_callback_age_ms,
+    // did_force_reacquire, force_reacquire_count, app_state, bg_task_id}.
+    'region_wake'
   ],
 
   DISTANCE_FILTER_PROVIDER: 0,
@@ -254,6 +258,29 @@ var BackgroundGeolocation = {
     return execWithPromise(success,
       failure,
       'getLocationDispatchStats');
+  },
+
+  // BG-11 (v2.10.0, iOS): register a rail of CLCircularRegion wake-up
+  // triggers. `regions` is an array of {id, lat, lon, radius} objects. The
+  // rail's only purpose is to wake the app (and restart standard
+  // CLLocationManager updates if they have stalled >30 s) — it never
+  // triggers step audio. JS-side polygon zone-check stays in charge of
+  // fine-grained step firing. Subscribe to the 'region_wake' event for
+  // telemetry. Android returns errback (action not implemented); callers
+  // should gate this on PLATFORM === 'ios'.
+  configureRail: function (regions, success, failure) {
+    return execWithPromise(success,
+      failure,
+      'configureRail', [regions || []]);
+  },
+
+  // BG-11 (v2.10.0, iOS): stop monitoring every rail region. Called from
+  // the parcours-cleanup path. Android returns errback (action not
+  // implemented); callers should gate on PLATFORM === 'ios'.
+  clearRail: function (success, failure) {
+    return execWithPromise(success,
+      failure,
+      'clearRail');
   },
 
   on: function (event, callbackFn) {

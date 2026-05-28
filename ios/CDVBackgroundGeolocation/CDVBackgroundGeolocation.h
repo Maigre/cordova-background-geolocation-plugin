@@ -37,5 +37,9 @@
 - (void) forceSync:(CDVInvokedUrlCommand*)command;
 - (void) addEventListener:(CDVInvokedUrlCommand*)command;
 - (void) removeEventListener:(CDVInvokedUrlCommand*)command;
+// BG-11 (v2.10.0): rail of wake-up regions. configureRail accepts an array of
+// {id, lat, lon, radius}; clearRail tears them all down. iOS-only.
+- (void) configureRail:(CDVInvokedUrlCommand*)command;
+- (void) clearRail:(CDVInvokedUrlCommand*)command;
 
 @end

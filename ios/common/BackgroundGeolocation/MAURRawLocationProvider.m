@@ -35,8 +35,23 @@ static NSString * const Domain = @"com.marianhello";
     // BG-10: separate CLLocationManager for SLC — tracks delivery independently from standard updates.
     CLLocationManager *_slcManager;
     NSDate            *_lastSLCLocationTime;
-    NSInteger          _forceReacquireCount; // throttle: max 3 auto-reacquires per session
+    NSInteger          _forceReacquireCount; // throttle: max FORCE_REACQUIRE_CAP auto-reacquires per session
+    NSDate            *_lastForceReacquireTime; // for the 30 s stall gate
+
+    // BG-11 (v2.10.0): rail of CLCircularRegion wake-up triggers. Separate
+    // CLLocationManager from `locationManager` and `_slcManager` so region
+    // delegate callbacks land here with a known sender identity.
+    CLLocationManager           *_railManager;
+    NSMutableArray<CLCircularRegion*> *_railRegions;
 }
+
+// BG-11: max auto-triggered CLLocationManager restarts per parcours session.
+// Raised from 3 → 10 to accommodate a rail of 16 transition midpoints — a
+// hostile iOS 26.3.x walk could legitimately trip several per kilometre.
+// The 30 s stall gate (_lastRealLocationTime age > 30 s before any new
+// reacquire fires) prevents thrashing on transient signal loss.
+static NSInteger const FORCE_REACQUIRE_CAP        = 10;
+static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
 
 - (instancetype) init
 {
@@ -128,6 +143,15 @@ static NSString * const Domain = @"com.marianhello";
         _lastSLCLocationTime = nil;
     }
 
+    // BG-11: tear down the rail of wake-up regions on full provider stop.
+    // (The JS layer also calls clearRail explicitly at parcours cleanup, but
+    // a hard onStop must not leave orphan region monitors behind either.)
+    [self clearRail];
+    if (_railManager) {
+        _railManager.delegate = nil;
+        _railManager = nil;
+    }
+
     [_motionActivityManager stopActivityUpdates];
     _motionActivityManager = nil;
 
@@ -204,10 +228,11 @@ static NSString * const Domain = @"com.marianhello";
     NSTimeInterval realAge = -[_lastRealLocationTime timeIntervalSinceNow];
     NSTimeInterval slcAge  = _lastSLCLocationTime
         ? -[_lastSLCLocationTime timeIntervalSinceNow] : 9999.0;
-    if (realAge > 90.0 && slcAge < 30.0 && _forceReacquireCount < 3) {
+    if (realAge > 90.0 && slcAge < 30.0 && _forceReacquireCount < FORCE_REACQUIRE_CAP) {
         _forceReacquireCount++;
-        DDLogInfo(@"%@ BG-10: real stalled %.0fs, SLC fresh %.0fs — auto-reacquire #%ld",
-                  TAG, realAge, slcAge, (long)_forceReacquireCount);
+        _lastForceReacquireTime = [NSDate date];
+        DDLogInfo(@"%@ BG-10: real stalled %.0fs, SLC fresh %.0fs — auto-reacquire #%ld/%ld",
+                  TAG, realAge, slcAge, (long)_forceReacquireCount, (long)FORCE_REACQUIRE_CAP);
         [self _doForceReacquire];
     }
 }
@@ -246,6 +271,171 @@ static NSString * const Domain = @"com.marianhello";
         DDLogDebug(@"%@ SLC delivered (age %.0fs)",
                    TAG, -[locations.lastObject.timestamp timeIntervalSinceNow]);
     }
+}
+
+#pragma mark - BG-11 rail of wake-up regions
+
+/**
+ * BG-11: configure the GPS rail. Replaces any previously-registered set with
+ * the new one. Called from CDVBackgroundGeolocation.configureRail (which
+ * forwards from JS at parcours entry).
+ */
+- (BOOL) configureRail:(NSArray<NSDictionary*>*)regions
+{
+    if (![CLLocationManager isMonitoringAvailableForClass:[CLCircularRegion class]]) {
+        DDLogWarn(@"%@ BG-11: region monitoring not available on this device", TAG);
+        return NO;
+    }
+
+    dispatch_block_t work = ^{
+        // Lazy-init the rail-dedicated CLLocationManager. Separate from the
+        // standard-updates and SLC managers so its delegate callbacks land
+        // here with a known sender identity.
+        if (self->_railManager == nil) {
+            self->_railManager = [[CLLocationManager alloc] init];
+            self->_railManager.delegate = self;
+            if (@available(iOS 9.0, *)) {
+                self->_railManager.allowsBackgroundLocationUpdates = YES;
+            }
+            self->_railManager.pausesLocationUpdatesAutomatically = NO;
+        }
+
+        // Wipe previously-monitored rail regions before re-registering.
+        for (CLCircularRegion *r in self->_railRegions) {
+            [self->_railManager stopMonitoringForRegion:r];
+        }
+        self->_railRegions = [NSMutableArray arrayWithCapacity:regions.count];
+
+        for (NSDictionary *spec in regions) {
+            NSString *rid     = spec[@"id"];
+            NSNumber *lat     = spec[@"lat"];
+            NSNumber *lon     = spec[@"lon"];
+            NSNumber *radius  = spec[@"radius"];
+            if (![rid isKindOfClass:[NSString class]] || rid.length == 0) continue;
+            if (![lat isKindOfClass:[NSNumber class]] || ![lon isKindOfClass:[NSNumber class]]) continue;
+            if (![radius isKindOfClass:[NSNumber class]] || [radius doubleValue] <= 0) continue;
+
+            CLLocationCoordinate2D center = CLLocationCoordinate2DMake([lat doubleValue], [lon doubleValue]);
+            CLCircularRegion *region = [[CLCircularRegion alloc] initWithCenter:center
+                                                                         radius:[radius doubleValue]
+                                                                     identifier:rid];
+            region.notifyOnEntry = YES;
+            region.notifyOnExit  = YES;
+
+            [self->_railManager startMonitoringForRegion:region];
+            [self->_railRegions addObject:region];
+        }
+        DDLogInfo(@"%@ BG-11: rail configured with %lu regions", TAG, (unsigned long)self->_railRegions.count);
+    };
+    if ([NSThread isMainThread]) work(); else dispatch_async(dispatch_get_main_queue(), work);
+    return YES;
+}
+
+- (void) clearRail
+{
+    dispatch_block_t work = ^{
+        if (self->_railManager == nil) return;
+        for (CLCircularRegion *r in self->_railRegions) {
+            [self->_railManager stopMonitoringForRegion:r];
+        }
+        [self->_railRegions removeAllObjects];
+        DDLogInfo(@"%@ BG-11: rail cleared", TAG);
+    };
+    if ([NSThread isMainThread]) work(); else dispatch_async(dispatch_get_main_queue(), work);
+}
+
+/**
+ * BG-11: CLLocationManagerDelegate for _railManager. Region entry/exit is the
+ * pure wake-up signal. We never trigger audio from here — JS-side polygon
+ * zone-check still owns step firing. What we do:
+ *   1. If real CLLocationManager callbacks have stalled >30 s and we are
+ *      under the FORCE_REACQUIRE_CAP, restart standard updates (D3 path).
+ *   2. Emit `region_wake` to the JS delegate channel for telemetry.
+ *   3. Open a short background task so the WebView can resume and the next
+ *      real callback can reach JS before iOS suspends us again.
+ */
+- (void)locationManager:(CLLocationManager *)manager
+         didEnterRegion:(CLRegion *)region
+{
+    if (manager != _railManager) return;
+    [self _handleRailEvent:@"enter" region:region];
+}
+
+- (void)locationManager:(CLLocationManager *)manager
+          didExitRegion:(CLRegion *)region
+{
+    if (manager != _railManager) return;
+    [self _handleRailEvent:@"exit" region:region];
+}
+
+- (void)locationManager:(CLLocationManager *)manager
+monitoringDidFailForRegion:(nullable CLRegion *)region
+              withError:(NSError *)error
+{
+    if (manager != _railManager) return;
+    DDLogWarn(@"%@ BG-11: rail region %@ monitoring failed: %@",
+              TAG, region.identifier, error.localizedDescription);
+}
+
+- (void) _handleRailEvent:(NSString*)event region:(CLRegion*)region
+{
+    NSTimeInterval realAge = _lastRealLocationTime
+        ? -[_lastRealLocationTime timeIntervalSinceNow] : 9999.0;
+    NSTimeInterval reacqAge = _lastForceReacquireTime
+        ? -[_lastForceReacquireTime timeIntervalSinceNow] : 9999.0;
+
+    BOOL didReacquire = NO;
+    if (realAge > FORCE_REACQUIRE_GATE_S
+        && _forceReacquireCount < FORCE_REACQUIRE_CAP
+        && reacqAge > FORCE_REACQUIRE_GATE_S) {
+        _forceReacquireCount++;
+        _lastForceReacquireTime = [NSDate date];
+        DDLogInfo(@"%@ BG-11: rail %@ for %@ — real stalled %.0fs, reacquire #%ld/%ld",
+                  TAG, event, region.identifier, realAge,
+                  (long)_forceReacquireCount, (long)FORCE_REACQUIRE_CAP);
+        [self _doForceReacquire];
+        didReacquire = YES;
+    } else {
+        DDLogDebug(@"%@ BG-11: rail %@ for %@ — realAge %.0fs (gate %.0fs), reacqCount %ld",
+                   TAG, event, region.identifier, realAge, FORCE_REACQUIRE_GATE_S, (long)_forceReacquireCount);
+    }
+
+    // Hold a short background task so the WebView has time to resume and
+    // process the JS-side region_wake event before iOS re-suspends us.
+    __block UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
+    bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithName:@"flanerie.railwake"
+                                                          expirationHandler:^{
+        [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+        bgTask = UIBackgroundTaskInvalid;
+    }];
+
+    UIApplicationState appState = [UIApplication sharedApplication].applicationState;
+    NSString *appStateStr = (appState == UIApplicationStateActive)     ? @"foreground"
+                          : (appState == UIApplicationStateBackground) ? @"background"
+                                                                       : @"inactive";
+
+    NSDictionary *payload = @{
+        @"region_id":                 region.identifier ?: @"",
+        @"event":                     event,
+        @"last_real_callback_age_ms": @((long long)(realAge * 1000.0)),
+        @"did_force_reacquire":       @(didReacquire),
+        @"force_reacquire_count":     @(_forceReacquireCount),
+        @"app_state":                 appStateStr,
+        @"bg_task_id":                (bgTask != UIBackgroundTaskInvalid) ? @(bgTask) : [NSNull null],
+    };
+
+    if (self.delegate && [self.delegate respondsToSelector:@selector(onRegionWake:)]) {
+        [self.delegate onRegionWake:payload];
+    }
+
+    // End the wake-keepalive task after a short delay — long enough for the
+    // JS event to land and the next real CLLocationManager callback to fire.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (bgTask != UIBackgroundTaskInvalid) {
+            [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+        }
+    });
 }
 
 /**

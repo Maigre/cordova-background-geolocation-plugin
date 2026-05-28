@@ -44,6 +44,12 @@
 - (void) forceSync;
 - (void) onAppTerminate;
 
+// BG-11 (v2.10.0): GPS rail of wake-up regions. iOS-only — forwarded to the
+// MAURRawLocationProvider instance when the active provider is Raw. No-op
+// (returns NO) on other providers. See MAURRawLocationProvider#configureRail.
+- (BOOL) configureRail:(NSArray<NSDictionary*>*)regions;
+- (void) clearRail;
+
 
 /**
  * Sets a transform for each coordinate about to be committed (sent or saved for later sync).

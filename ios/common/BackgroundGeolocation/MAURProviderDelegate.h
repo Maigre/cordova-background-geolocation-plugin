@@ -47,6 +47,14 @@ typedef NS_ENUM(NSInteger, MAUROperationalMode) {
 - (void) onHttpAuthorization;
 - (void) onError:(NSError*)error;
 
+@optional
+// BG-11 (v2.10.0): GPS rail wake-up. Fired when a CLCircularRegion in the
+// transition-midpoint rail is entered/exited. Payload carries region_id,
+// event ("enter"/"exit"), last_real_callback_age_ms, did_force_reacquire,
+// app_state. Telemetry-only on the JS side — fine-grained step triggering
+// remains owned by the polygon-based zone check.
+- (void) onRegionWake:(NSDictionary*)payload;
+
 @end
 
 #endif /* MAURProviderDelegate_h */

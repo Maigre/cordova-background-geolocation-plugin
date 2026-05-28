@@ -620,4 +620,29 @@ FMDBLogger *sqliteLogger;
     }
 }
 
+#pragma mark - BG-11 rail passthrough
+
+- (BOOL) configureRail:(NSArray<NSDictionary*>*)regions
+{
+    if ([locationProvider isKindOfClass:[MAURRawLocationProvider class]]) {
+        return [(MAURRawLocationProvider*)locationProvider configureRail:regions];
+    }
+    DDLogWarn(@"%@ configureRail: active provider is not Raw — rail not applied", TAG);
+    return NO;
+}
+
+- (void) clearRail
+{
+    if ([locationProvider isKindOfClass:[MAURRawLocationProvider class]]) {
+        [(MAURRawLocationProvider*)locationProvider clearRail];
+    }
+}
+
+- (void) onRegionWake:(NSDictionary*)payload
+{
+    if (_delegate && [_delegate respondsToSelector:@selector(onRegionWake:)]) {
+        [_delegate onRegionWake:payload];
+    }
+}
+
 @end
