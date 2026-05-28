@@ -64,7 +64,12 @@ var BackgroundGeolocation = {
     // BG-11 (v2.10.0, iOS): rail of CLCircularRegion wake-ups fired the
     // listener — payload {region_id, event, last_real_callback_age_ms,
     // did_force_reacquire, force_reacquire_count, app_state, bg_task_id}.
-    'region_wake'
+    'region_wake',
+    // BG-12 (v2.11.0, iOS): CLVisit fired — payload {latitude, longitude,
+    // horizontal_accuracy_m, arrival_date, departure_date, arrival_age_ms,
+    // departure_known}. Observation-only telemetry of iOS "user stopped"
+    // inference; never triggers step audio.
+    'visit'
   ],
 
   DISTANCE_FILTER_PROVIDER: 0,

@@ -55,6 +55,13 @@ typedef NS_ENUM(NSInteger, MAUROperationalMode) {
 // remains owned by the polygon-based zone check.
 - (void) onRegionWake:(NSDictionary*)payload;
 
+// BG-12 (v2.11.0): iOS CLVisit fired. Payload carries latitude, longitude,
+// horizontal_accuracy_m, arrival_date, departure_date (ISO 8601, may be
+// null while still at the visited place), arrival_age_ms, departure_known.
+// Telemetry-only — observation of "user stopped" inference; never triggers
+// step audio.
+- (void) onVisit:(NSDictionary*)payload;
+
 @end
 
 #endif /* MAURProviderDelegate_h */

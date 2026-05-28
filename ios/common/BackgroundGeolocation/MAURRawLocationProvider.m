@@ -43,6 +43,15 @@ static NSString * const Domain = @"com.marianhello";
     // delegate callbacks land here with a known sender identity.
     CLLocationManager           *_railManager;
     NSMutableArray<CLCircularRegion*> *_railRegions;
+
+    // BG-12 (v2.11.0): visit monitoring. CLVisit / startMonitoringVisits has
+    // been in CoreLocation since iOS 8 — separate CLLocationManager again so
+    // visit delegate callbacks land here with a known sender identity. The
+    // emitted gps_visit_event is observation-only telemetry: iOS infers when
+    // the user "stopped" somewhere; we measure whether that detection is
+    // reliable enough to eventually power a step-confirm signal (decided per
+    // ios-native-plan §5 Option B).
+    CLLocationManager           *_visitManager;
 }
 
 // BG-11: max auto-triggered CLLocationManager restarts per parcours session.
@@ -112,6 +121,21 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
         DDLogDebug(@"%@ SLC monitor started", TAG);
     }
 
+    // BG-12: start visit monitoring. CLLocationManager.startMonitoringVisits
+    // delivers a CLVisit when iOS infers the user has stopped at a place; no
+    // budget impact (it's a low-power observer like SLC). Telemetry-only —
+    // never triggers step audio.
+    if (isStarted && _visitManager == nil) {
+        _visitManager = [[CLLocationManager alloc] init];
+        _visitManager.delegate = self;
+        if (@available(iOS 9.0, *)) {
+            _visitManager.allowsBackgroundLocationUpdates = YES;
+        }
+        _visitManager.pausesLocationUpdatesAutomatically = NO;
+        [_visitManager startMonitoringVisits];
+        DDLogDebug(@"%@ visit monitor started", TAG);
+    }
+
     // Always (re-)start motion updates when the manager is not yet running.
     // On first install the motion dialog can appear while the location dialog
     // is still visible, causing the user to miss it. Re-triggering on every
@@ -150,6 +174,13 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
     if (_railManager) {
         _railManager.delegate = nil;
         _railManager = nil;
+    }
+
+    // BG-12: stop visit monitoring.
+    if (_visitManager) {
+        [_visitManager stopMonitoringVisits];
+        _visitManager.delegate = nil;
+        _visitManager = nil;
     }
 
     [_motionActivityManager stopActivityUpdates];
@@ -375,6 +406,52 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
     if (manager != _railManager) return;
     DDLogWarn(@"%@ BG-11: rail region %@ monitoring failed: %@",
               TAG, region.identifier, error.localizedDescription);
+}
+
+#pragma mark - BG-12 visit monitoring
+
+/**
+ * BG-12: CLLocationManagerDelegate for _visitManager. CLVisit fires when iOS
+ * infers the user has arrived at and/or departed from a place. Observation-
+ * only: forwarded to JS as a `visit` event for telemetry. Decision 5 Option B
+ * in ios-native-plan.md — measure whether visit detection correlates with
+ * actual step dwell time before considering it as a step-confirm signal.
+ *
+ * Apple sentinel: a CLVisit with `departureDate == NSDate distantFuture`
+ * indicates the user is still at the visited place; both arrival and
+ * departure dates are valid once the visit has ended. We expose both as
+ * ISO 8601 strings; JS treats distantFuture as null.
+ */
+- (void)locationManager:(CLLocationManager *)manager
+               didVisit:(CLVisit *)visit
+{
+    if (manager != _visitManager) return;
+
+    NSDateFormatter *iso = [[NSDateFormatter alloc] init];
+    iso.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
+    iso.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    iso.timeZone = [NSTimeZone timeZoneWithName:@"UTC"];
+
+    BOOL departureKnown = ![visit.departureDate isEqualToDate:[NSDate distantFuture]];
+
+    NSDictionary *payload = @{
+        @"latitude":           @(visit.coordinate.latitude),
+        @"longitude":          @(visit.coordinate.longitude),
+        @"horizontal_accuracy_m": @(visit.horizontalAccuracy),
+        @"arrival_date":       [iso stringFromDate:visit.arrivalDate]   ?: [NSNull null],
+        @"departure_date":     departureKnown ? [iso stringFromDate:visit.departureDate] : [NSNull null],
+        @"arrival_age_ms":     @((long long)([[NSDate date] timeIntervalSinceDate:visit.arrivalDate] * 1000.0)),
+        @"departure_known":    @(departureKnown),
+    };
+
+    DDLogInfo(@"%@ BG-12: visit lat=%.5f lon=%.5f acc=%.0fm arr=%@ dep=%@",
+              TAG, visit.coordinate.latitude, visit.coordinate.longitude,
+              visit.horizontalAccuracy,
+              visit.arrivalDate, departureKnown ? visit.departureDate : @"(still there)");
+
+    if (self.delegate && [self.delegate respondsToSelector:@selector(onVisit:)]) {
+        [self.delegate onVisit:payload];
+    }
 }
 
 - (void) _handleRailEvent:(NSString*)event region:(CLRegion*)region

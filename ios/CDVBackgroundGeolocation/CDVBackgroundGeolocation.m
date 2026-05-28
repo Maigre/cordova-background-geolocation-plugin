@@ -583,6 +583,14 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     [self sendEvent:@"region_wake" result:payload];
 }
 
+// BG-12 (v2.11.0): iOS CLVisit fired. Forwarded to JS as `visit` event for
+// observation-only telemetry — never triggers step audio.
+- (void) onVisit:(NSDictionary*)payload
+{
+    NSLog(@"%@ #%@ acc=%@m", TAG, @"onVisit", payload[@"horizontal_accuracy_m"]);
+    [self sendEvent:@"visit" result:payload];
+}
+
 - (void) onError:(NSError*)error
 {
     NSLog(@"%@ #%@", TAG, @"onError");

@@ -645,4 +645,11 @@ FMDBLogger *sqliteLogger;
     }
 }
 
+- (void) onVisit:(NSDictionary*)payload
+{
+    if (_delegate && [_delegate respondsToSelector:@selector(onVisit:)]) {
+        [_delegate onVisit:payload];
+    }
+}
+
 @end
