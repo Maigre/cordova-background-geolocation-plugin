@@ -357,8 +357,8 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 - (void) forceReacquire:(CDVInvokedUrlCommand*)command
 {
     NSLog(@"%@ #%@", TAG, @"forceReacquire");
-    CLLocationManager *clm = [MAURLocationManager sharedInstance].locationManager;
     dispatch_async(dispatch_get_main_queue(), ^{
+        CLLocationManager *clm = [MAURLocationManager sharedInstance].locationManager;
         [clm stopUpdatingLocation];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)),
                        dispatch_get_main_queue(), ^{
@@ -389,25 +389,28 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 {
     NSLog(@"%@ #%@", TAG, @"getCLState");
     [self.commandDelegate runInBackground:^{
-        CLLocationManager *clm = [MAURLocationManager sharedInstance].locationManager;
-        CLAuthorizationStatus authStatus = [CLLocationManager authorizationStatus];
-        BOOL hasLocation = (clm.location != nil);
-        NSTimeInterval locationAge = -1;
-        double locationAgeMs = -1;
-        if (hasLocation) {
-            locationAge = [[NSDate date] timeIntervalSinceDate:clm.location.timestamp];
-            locationAgeMs = locationAge * 1000.0;
-        }
-        NSDictionary *state = @{
-            @"hasLocation":                        @(hasLocation),
-            @"locationTimestampAgeMs":             @(locationAgeMs),
-            @"locationTimestampAge":               @(locationAge),
-            @"allowsBackgroundLocationUpdates":    @(clm.allowsBackgroundLocationUpdates),
-            @"pausesLocationUpdatesAutomatically": @(clm.pausesLocationUpdatesAutomatically),
-            @"showsBackgroundLocationIndicator":   @(clm.showsBackgroundLocationIndicator),
-            @"authorizationStatus":                @(authStatus),
-            @"locationServicesEnabled":            @([CLLocationManager locationServicesEnabled]),
-        };
+        __block NSDictionary *state = nil;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            CLLocationManager *clm = [MAURLocationManager sharedInstance].locationManager;
+            CLAuthorizationStatus authStatus = [CLLocationManager authorizationStatus];
+            BOOL hasLocation = (clm.location != nil);
+            NSTimeInterval locationAge = -1;
+            double locationAgeMs = -1;
+            if (hasLocation) {
+                locationAge = [[NSDate date] timeIntervalSinceDate:clm.location.timestamp];
+                locationAgeMs = locationAge * 1000.0;
+            }
+            state = @{
+                @"hasLocation":                        @(hasLocation),
+                @"locationTimestampAgeMs":             @(locationAgeMs),
+                @"locationTimestampAge":               @(locationAge),
+                @"allowsBackgroundLocationUpdates":    @(clm.allowsBackgroundLocationUpdates),
+                @"pausesLocationUpdatesAutomatically": @(clm.pausesLocationUpdatesAutomatically),
+                @"showsBackgroundLocationIndicator":   @(clm.showsBackgroundLocationIndicator),
+                @"authorizationStatus":                @(authStatus),
+                @"locationServicesEnabled":            @([CLLocationManager locationServicesEnabled]),
+            };
+        });
         CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:state];
         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
     }];

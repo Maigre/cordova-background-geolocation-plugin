@@ -299,7 +299,18 @@ static MAURLocationAuthorizationStatus MAURAuthorizationStatusFromCLAuthorizatio
     static MAURLocationManager *sharedLocationControllerInstance = nil;
     static dispatch_once_t predicate;
     dispatch_once(&predicate, ^{
-        sharedLocationControllerInstance = [[self alloc] init];
+        void (^createInstance)(void) = ^{
+            sharedLocationControllerInstance = [[self alloc] init];
+        };
+
+        // CLLocationManager delegate delivery is tied to the thread/run loop
+        // where the manager is created. Force singleton construction onto the
+        // main thread so worker-thread status probes cannot strand callbacks.
+        if ([NSThread isMainThread]) {
+            createInstance();
+        } else {
+            dispatch_sync(dispatch_get_main_queue(), createInstance);
+        }
     });
     return sharedLocationControllerInstance;
 }

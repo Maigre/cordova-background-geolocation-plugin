@@ -261,12 +261,20 @@ FMDBLogger *sqliteLogger;
 
 - (BOOL) locationServicesEnabled
 {
-    return [[MAURLocationManager sharedInstance] locationServicesEnabled];
+    __block BOOL enabled = NO;
+    [self runOnMainThread:^{
+        enabled = [[MAURLocationManager sharedInstance] locationServicesEnabled];
+    }];
+    return enabled;
 }
 
 - (MAURLocationAuthorizationStatus) authorizationStatus
 {
-    return [[MAURLocationManager sharedInstance] authorizationStatus];
+    __block MAURLocationAuthorizationStatus status = MAURLocationAuthorizationNotDetermined;
+    [self runOnMainThread:^{
+        status = [[MAURLocationManager sharedInstance] authorizationStatus];
+    }];
+    return status;
 }
 
 - (BOOL) isStarted
