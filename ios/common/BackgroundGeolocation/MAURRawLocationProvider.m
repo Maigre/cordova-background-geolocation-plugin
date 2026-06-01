@@ -673,19 +673,59 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (!isStarted || _motionActivityManager != nil) {
+            if (!isStarted) {
                 return;
             }
 
-            _motionActivityManager = [[CMMotionActivityManager alloc] init];
-            [_motionActivityManager startActivityUpdatesToQueue:[NSOperationQueue mainQueue]
-                                                   withHandler:^(CMMotionActivity *activity) {
-                _deviceIsStationary = activity.stationary;
+            BOOL firstTime = (_motionActivityManager == nil);
+            if (firstTime) {
+                _motionActivityManager = [[CMMotionActivityManager alloc] init];
+            }
+
+            // Force the iOS "Motion & Fitness" prompt to appear reliably. NOTE:
+            // startActivityUpdatesToQueue alone is NOT a dependable trigger — on a
+            // stationary device it can defer the authorization prompt until the
+            // device actually moves, so a visitor who set the phone down at the
+            // checkmotion screen never sees it (and the app never even appears under
+            // Settings > Mouvement et fitness because no request reached iOS). A
+            // historical query touches the motion store immediately, which presents
+            // the prompt right away; its handler also reports the auth result. We run
+            // it on EVERY call (not gated on firstTime) so a retry / re-onboarding in
+            // the same app session re-triggers the prompt instead of silently bailing
+            // on the old `_motionActivityManager != nil` guard.
+            NSDate *from = [NSDate dateWithTimeIntervalSinceNow:-60];
+            [_motionActivityManager queryActivityStartingFromDate:from
+                                                          toDate:[NSDate date]
+                                                         toQueue:[NSOperationQueue mainQueue]
+                                                     withHandler:^(NSArray<CMMotionActivity *> *activities, NSError *error) {
+                if (error) {
+                    // CMErrorMotionActivityNotAuthorized (etc.) — not authorized. Leave
+                    // the JS checkmotion screen to time out and deep-link to Settings
+                    // (the app now appears there because the request did reach iOS).
+                    DDLogWarn(@"%@ motion query auth error: %ld", TAG, (long)error.code);
+                    return;
+                }
+                // Authorized. Emit an activity immediately so the JS motionAuthorized
+                // flag flips even when the device is stationary and live updates have
+                // not fired yet.
+                CMMotionActivity *last = [activities lastObject];
                 MAURActivity *act = [[MAURActivity alloc] init];
-                act.type = activity.stationary ? @"STILL" : activity.walking ? @"WALKING" : @"UNKNOWN";
-                act.confidence = @(activity.confidence);
+                act.type = last ? (last.stationary ? @"STILL" : last.walking ? @"WALKING" : @"UNKNOWN") : @"UNKNOWN";
+                act.confidence = last ? @(last.confidence) : @(0);
                 [self.delegate onActivityChanged:act];
             }];
+
+            // Live updates for ongoing stationary/walking detection — start once.
+            if (firstTime) {
+                [_motionActivityManager startActivityUpdatesToQueue:[NSOperationQueue mainQueue]
+                                                       withHandler:^(CMMotionActivity *activity) {
+                    _deviceIsStationary = activity.stationary;
+                    MAURActivity *act = [[MAURActivity alloc] init];
+                    act.type = activity.stationary ? @"STILL" : activity.walking ? @"WALKING" : @"UNKNOWN";
+                    act.confidence = @(activity.confidence);
+                    [self.delegate onActivityChanged:act];
+                }];
+            }
         });
     });
 }
