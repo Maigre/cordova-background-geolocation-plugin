@@ -22,6 +22,7 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     NSString *callbackId;
     MAURConfig *config;
     MAURBackgroundGeolocationFacade* facade;
+    BOOL pendingMotionUpdates;
 
     API_AVAILABLE(ios(10.0))
     __weak id<UNUserNotificationCenterDelegate> prevNotificationDelegate;
@@ -48,11 +49,28 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppPause:) name:UIApplicationDidEnterBackgroundNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppResume:) name:UIApplicationWillEnterForegroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppBecameActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onFinishLaunching:) name:UIApplicationDidFinishLaunchingNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppTerminate:) name:UIApplicationWillTerminateNotification object:nil];
 
     // BG-4: enable battery monitoring once so getPowerState can read batteryLevel/batteryState.
     [UIDevice currentDevice].batteryMonitoringEnabled = YES;
+}
+
+- (void)requestMotionUpdatesWhenAppActive:(NSString *)reason
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIApplication *app = [UIApplication sharedApplication];
+        if (app.applicationState != UIApplicationStateActive) {
+            self->pendingMotionUpdates = YES;
+            NSLog(@"%@ queued motion prompt until active (%@)", TAG, reason);
+            return;
+        }
+
+        self->pendingMotionUpdates = NO;
+        NSLog(@"%@ flushing motion prompt (%@)", TAG, reason);
+        [self->facade startMotionUpdates];
+    });
 }
 
 /*
@@ -500,7 +518,7 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 {
     NSLog(@"%@ #%@", TAG, @"startMotionUpdates");
     [self.commandDelegate runInBackground:^{
-        [self->facade startMotionUpdates];
+        [self requestMotionUpdatesWhenAppActive:@"js_command"];
         CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
     }];
@@ -653,6 +671,18 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 {
     NSLog(@"%@ %@", TAG, @"resumed");
     [facade switchMode:MAURForegroundMode];
+}
+
+-(void) onAppBecameActive:(NSNotification *)notification
+{
+    if (!pendingMotionUpdates) {
+        return;
+    }
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(250 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{
+        [self requestMotionUpdatesWhenAppActive:@"did_become_active"];
+    });
 }
 
 -(void) onAppPause:(NSNotification *)notification
