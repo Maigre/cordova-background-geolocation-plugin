@@ -11,6 +11,7 @@
 
 #import "CDVBackgroundGeolocation.h"
 #import <WebKit/WebKit.h>
+#import <CoreMotion/CoreMotion.h>
 #import "MAURConfig.h"
 #import "MAURBackgroundGeolocationFacade.h"
 #import "MAURBackgroundTaskManager.h"
@@ -519,7 +520,30 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     NSLog(@"%@ #%@", TAG, @"startMotionUpdates");
     [self.commandDelegate runInBackground:^{
         [self requestMotionUpdatesWhenAppActive:@"js_command"];
-        CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+
+        // Diagnostic: report what the native side actually sees back to JS so the
+        // checkmotion telemetry carries the ground truth. l5bi (iOS 26.4.2, apk 21)
+        // showed 41 JS retries, all visible=true, yet the prompt never appeared and
+        // motion never granted — with no way to tell an implicit Denied from a
+        // NotDetermined whose prompt opportunity was consumed during the post-Settings
+        // settling window. authStatus: 0=NotDetermined 1=Restricted 2=Denied 3=Authorized.
+        NSInteger authStatus = -1;
+        if ([CMMotionActivityManager respondsToSelector:@selector(authorizationStatus)]) {
+            authStatus = (NSInteger)[CMMotionActivityManager authorizationStatus];
+        }
+        BOOL available = [CMMotionActivityManager isActivityAvailable];
+        __block NSInteger appState = -1;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            appState = (NSInteger)[UIApplication sharedApplication].applicationState; // 0=Active 1=Inactive 2=Background
+        });
+
+        NSDictionary *info = @{
+            @"authStatus": @(authStatus),
+            @"appState": @(appState),
+            @"activityAvailable": @(available),
+            @"pendingUntilActive": @(self->pendingMotionUpdates),
+        };
+        CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:info];
         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
     }];
 }
