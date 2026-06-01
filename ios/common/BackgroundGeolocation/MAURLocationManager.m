@@ -302,23 +302,22 @@ static MAURLocationAuthorizationStatus MAURAuthorizationStatusFromCLAuthorizatio
     static MAURLocationManager *sharedLocationControllerInstance = nil;
     static dispatch_once_t predicate;
     dispatch_once(&predicate, ^{
-        void (^createInstance)(void) = ^{
-            sharedInstanceCreatedOnMainThread = [NSThread isMainThread];
-            sharedInstanceCreationThreadLabel = sharedInstanceCreatedOnMainThread
-                ? @"main"
-                : (([NSThread currentThread].name.length > 0) ? [NSThread currentThread].name : @"background");
-            sharedInstanceCreationDate = [NSDate date];
-            sharedLocationControllerInstance = [[self alloc] init];
-        };
-
-        // CLLocationManager delegate delivery is tied to the thread/run loop
-        // where the manager is created. Force singleton construction onto the
-        // main thread so worker-thread status probes cannot strand callbacks.
-        if ([NSThread isMainThread]) {
-            createInstance();
-        } else {
-            dispatch_sync(dispatch_get_main_queue(), createInstance);
-        }
+        // CLLocationManager delegate delivery is tied to the thread/run loop where
+        // the manager is created, so it MUST be built on the main thread or its
+        // callbacks strand (the cause of the "En attente du GPS" stalls). We
+        // guarantee that by warming this singleton from CDVBackgroundGeolocation
+        // pluginInitialize, which runs on the main thread before any JS command can
+        // reach a worker-thread status probe. Construction is therefore done
+        // IN-PLACE here — deliberately NOT via dispatch_sync(main), which combined
+        // with dispatch_once is a deadlock shape (a main-thread caller blocked on the
+        // once token while a worker holds it inside dispatch_sync to main). The BG-13
+        // sharedInstanceCreatedOnMainThread telemetry flags any regression.
+        sharedInstanceCreatedOnMainThread = [NSThread isMainThread];
+        sharedInstanceCreationThreadLabel = sharedInstanceCreatedOnMainThread
+            ? @"main"
+            : (([NSThread currentThread].name.length > 0) ? [NSThread currentThread].name : @"background");
+        sharedInstanceCreationDate = [NSDate date];
+        sharedLocationControllerInstance = [[self alloc] init];
     });
     return sharedLocationControllerInstance;
 }

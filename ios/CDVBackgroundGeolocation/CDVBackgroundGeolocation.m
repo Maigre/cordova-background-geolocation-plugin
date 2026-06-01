@@ -39,6 +39,13 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     facade = [[MAURBackgroundGeolocationFacade alloc] init];
     facade.delegate = self;
 
+    // Warm the CLLocationManager singleton here, on the main thread. pluginInitialize
+    // runs on the main thread before any JS command, so this guarantees the manager
+    // (and thus its delegate run loop) is created on main — even though the first
+    // JS-driven access is usually a worker-thread checkStatus probe. Without this,
+    // that probe would build the manager off-main and strand its location callbacks.
+    [MAURLocationManager sharedInstance];
+
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppPause:) name:UIApplicationDidEnterBackgroundNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppResume:) name:UIApplicationWillEnterForegroundNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onFinishLaunching:) name:UIApplicationDidFinishLaunchingNotification object:nil];
@@ -88,15 +95,17 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
         dispatch_sync(dispatch_get_main_queue(), ^{
             [self->facade start:&error];
         });
+
+        // Report the actual start outcome. (Previously this re-ran configure: and
+        // returned THAT result, so a start failure could be masked behind a config
+        // success. facade start already applies the full config via onConfigure, so
+        // the extra configure: call was redundant as well as misleading.)
+        CDVPluginResult* result = nil;
         if (error == nil) {
             [self sendEvent:@"start"];
-        } else {
-            [self sendError:error];
-        }
-        CDVPluginResult* result = nil;
-        if ([self->facade configure:self->config error:&error]) {
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
         } else {
+            [self sendError:error];
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[self errorToDictionary:error]];
         }
         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
@@ -113,15 +122,14 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
         NSError *error = nil;
 
         [self->facade stop:&error];
+
+        // Report the actual stop outcome (previously returned a redundant configure: result).
+        CDVPluginResult* result = nil;
         if (error == nil) {
             [self sendEvent:@"stop"];
-        } else {
-            [self sendError:error];
-        }
-        CDVPluginResult* result = nil;
-        if ([self->facade configure:self->config error:&error]) {
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
         } else {
+            [self sendError:error];
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:[self errorToDictionary:error]];
         }
         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
