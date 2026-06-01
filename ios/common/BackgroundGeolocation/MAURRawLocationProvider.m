@@ -29,8 +29,17 @@ static NSString * const Domain = @"com.marianhello";
     MAURConfig *_config;
     NSTimer *_keepaliveTimer;
     NSDate  *_lastRealLocationTime;
+    NSDate  *_lastKeepaliveLocationTime;
+    NSDate  *_lastRailWakeTime;
+    NSDate  *_lastVisitTime;
     CMMotionActivityManager *_motionActivityManager;
     BOOL _deviceIsStationary;
+    NSInteger _realLocationCount;
+    NSInteger _keepaliveCount;
+    NSInteger _slcCount;
+    NSInteger _railWakeCount;
+    NSInteger _railMonitorFailCount;
+    NSInteger _visitCount;
 
     // BG-10: separate CLLocationManager for SLC — tracks delivery independently from standard updates.
     CLLocationManager *_slcManager;
@@ -101,7 +110,16 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
         if (isStarted) {
             [locationManager setShowsBackgroundLocationIndicator:YES];
             _lastRealLocationTime = [NSDate date];
+            _lastKeepaliveLocationTime = nil;
+            _lastRailWakeTime = nil;
+            _lastVisitTime = nil;
             _forceReacquireCount = 0;
+            _realLocationCount = 0;
+            _keepaliveCount = 0;
+            _slcCount = 0;
+            _railWakeCount = 0;
+            _railMonitorFailCount = 0;
+            _visitCount = 0;
             [_keepaliveTimer invalidate];
             _keepaliveTimer = [NSTimer scheduledTimerWithTimeInterval:15.0
                                                                target:self
@@ -209,6 +227,7 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
 - (void) onLocationsChanged:(NSArray*)locations
 {
     _lastRealLocationTime = [NSDate date];
+    _realLocationCount += locations.count;
     for (CLLocation *location in locations) {
         MAURLocation *bgloc = [MAURLocation fromCLLocation:location];
         [self.delegate onLocationChanged:bgloc];
@@ -226,6 +245,8 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
     DDLogDebug(@"%@ keepalive: %.0fs gap, device %@",
                TAG, -[_lastRealLocationTime timeIntervalSinceNow],
                _deviceIsStationary ? @"stationary (expected)" : @"moving (GPS signal loss)");
+    _keepaliveCount++;
+    _lastKeepaliveLocationTime = [NSDate date];
     MAURLocation *bgloc = [MAURLocation fromCLLocation:cached];
     // F-G4: tag this as a keepalive tick (NSTimer source, not a real CLLocationManager callback).
     bgloc.isKeepalive = YES;
@@ -297,6 +318,7 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
      didUpdateLocations:(NSArray<CLLocation *> *)locations
 {
     if (manager == _slcManager && locations.lastObject) {
+        _slcCount += locations.count;
         _lastSLCLocationTime = [NSDate date];
         DDLogDebug(@"%@ SLC delivered (age %.0fs)",
                    TAG, -[locations.lastObject.timestamp timeIntervalSinceNow]);
@@ -413,6 +435,7 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
     if (manager != _railManager) return;
     DDLogWarn(@"%@ BG-11: rail region %@ monitoring failed: %@",
               TAG, region.identifier, error.localizedDescription);
+    _railMonitorFailCount++;
     NSDictionary *payload = @{
         @"region_id":   region.identifier ?: @"",
         @"error_code":  @(error.code),
@@ -443,6 +466,8 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
                didVisit:(CLVisit *)visit
 {
     if (manager != _visitManager) return;
+    _visitCount++;
+    _lastVisitTime = [NSDate date];
 
     NSDateFormatter *iso = [[NSDateFormatter alloc] init];
     iso.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
@@ -473,6 +498,8 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
 
 - (void) _handleRailEvent:(NSString*)event region:(CLRegion*)region
 {
+    _railWakeCount++;
+    _lastRailWakeTime = [NSDate date];
     NSTimeInterval realAge = _lastRealLocationTime
         ? -[_lastRealLocationTime timeIntervalSinceNow] : 9999.0;
     NSTimeInterval reacqAge = _lastForceReacquireTime
@@ -530,6 +557,45 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
             [[UIApplication sharedApplication] endBackgroundTask:bgTask];
         }
     });
+}
+
+- (NSDictionary*) iosStreamHealth
+{
+    CLLocationManager *clm = locationManager.locationManager;
+    NSTimeInterval realAge = _lastRealLocationTime ? -[_lastRealLocationTime timeIntervalSinceNow] : -1;
+    NSTimeInterval keepaliveAge = _lastKeepaliveLocationTime ? -[_lastKeepaliveLocationTime timeIntervalSinceNow] : -1;
+    NSTimeInterval slcAge = _lastSLCLocationTime ? -[_lastSLCLocationTime timeIntervalSinceNow] : -1;
+    NSTimeInterval railWakeAge = _lastRailWakeTime ? -[_lastRailWakeTime timeIntervalSinceNow] : -1;
+    NSTimeInterval visitAge = _lastVisitTime ? -[_lastVisitTime timeIntervalSinceNow] : -1;
+    NSTimeInterval forceReacquireAge = _lastForceReacquireTime ? -[_lastForceReacquireTime timeIntervalSinceNow] : -1;
+
+    return @{
+        @"implemented": @YES,
+        @"is_started": @(isStarted),
+        @"real_location_count": @(_realLocationCount),
+        @"keepalive_count": @(_keepaliveCount),
+        @"slc_count": @(_slcCount),
+        @"rail_wake_count": @(_railWakeCount),
+        @"rail_monitor_fail_count": @(_railMonitorFailCount),
+        @"visit_count": @(_visitCount),
+        @"last_real_age_ms": @(realAge >= 0 ? (long long)(realAge * 1000.0) : -1),
+        @"last_keepalive_age_ms": @(keepaliveAge >= 0 ? (long long)(keepaliveAge * 1000.0) : -1),
+        @"last_slc_age_ms": @(slcAge >= 0 ? (long long)(slcAge * 1000.0) : -1),
+        @"last_rail_wake_age_ms": @(railWakeAge >= 0 ? (long long)(railWakeAge * 1000.0) : -1),
+        @"last_visit_age_ms": @(visitAge >= 0 ? (long long)(visitAge * 1000.0) : -1),
+        @"force_reacquire_count": @(_forceReacquireCount),
+        @"last_force_reacquire_age_ms": @(forceReacquireAge >= 0 ? (long long)(forceReacquireAge * 1000.0) : -1),
+        @"device_is_stationary": @(_deviceIsStationary),
+        @"rail_region_count": @(_railRegions.count),
+        @"has_cl_location": @(clm.location != nil),
+        @"cl_location_age_ms": @((clm.location != nil) ? (long long)([[NSDate date] timeIntervalSinceDate:clm.location.timestamp] * 1000.0) : -1),
+        @"allows_background_location_updates": @(clm ? clm.allowsBackgroundLocationUpdates : NO),
+        @"pauses_location_updates_automatically": @(clm ? clm.pausesLocationUpdatesAutomatically : NO),
+        @"shows_background_location_indicator": @((clm != nil && @available(iOS 11, *)) ? clm.showsBackgroundLocationIndicator : NO),
+        @"shared_manager_created_on_main_thread": @([MAURLocationManager sharedInstanceCreatedOnMainThread]),
+        @"shared_manager_creation_thread": [MAURLocationManager sharedInstanceCreationThreadLabel],
+        @"shared_manager_creation_age_ms": [MAURLocationManager sharedInstanceCreationAgeMs] ?: @(-1),
+    };
 }
 
 /**

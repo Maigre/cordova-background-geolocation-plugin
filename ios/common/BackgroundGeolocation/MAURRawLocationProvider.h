@@ -35,6 +35,10 @@
 // it no-ops once the manager is running or if the location provider isn't started.
 - (void) startMotionUpdates;
 
+// BG-13 (iOS): snapshot native stream-health counters so JS can correlate
+// stale/frozen GPS with the underlying delivery mix.
+- (NSDictionary*) iosStreamHealth;
+
 @end
 
 #endif /* MAURRawLocationProvider_h */

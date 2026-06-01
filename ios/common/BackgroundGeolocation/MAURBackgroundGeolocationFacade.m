@@ -655,6 +655,23 @@ FMDBLogger *sqliteLogger;
     }
 }
 
+- (NSDictionary*) iosStreamHealth
+{
+    __block NSDictionary *state = nil;
+    [self runOnMainThread:^{
+        if ([locationProvider isKindOfClass:[MAURRawLocationProvider class]]) {
+            state = [(MAURRawLocationProvider*)locationProvider iosStreamHealth];
+        } else {
+            state = @{
+                @"implemented": @NO,
+                @"is_started": @(isStarted),
+                @"provider": locationProvider ? NSStringFromClass([locationProvider class]) : @"none",
+            };
+        }
+    }];
+    return state;
+}
+
 - (void) onRegionWake:(NSDictionary*)payload
 {
     if (_delegate && [_delegate respondsToSelector:@selector(onRegionWake:)]) {

@@ -51,5 +51,8 @@
 - (MAURLocationAuthorizationStatus) authorizationStatus;
 
 + (MAURLocationManager*)sharedInstance; // Singleton method
++ (BOOL) sharedInstanceCreatedOnMainThread;
++ (NSString*) sharedInstanceCreationThreadLabel;
++ (NSNumber*) sharedInstanceCreationAgeMs;
 
 @end

@@ -239,6 +239,15 @@ var BackgroundGeolocation = {
       'getPowerState');
   },
 
+  // BG-13 (iOS): native stream-health snapshot. Returns delivery counters for
+  // real CLLocation callbacks, keepalive replays, SLC, rail wakes, visits,
+  // force-reacquires, and shared CLLocationManager creation metadata.
+  getIOSStreamHealth: function (success, failure) {
+    return execWithPromise(success,
+      failure,
+      'getIOSStreamHealth');
+  },
+
   // BG-2: D3 — force CLLocationManager stop/restart when real callbacks stall (iOS only).
   // Throttle to max 3 calls/session from JS; native auto-trigger (BG-10) also observes this limit.
   forceReacquire: function (success, failure) {

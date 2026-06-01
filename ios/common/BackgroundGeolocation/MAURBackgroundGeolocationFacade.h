@@ -55,6 +55,9 @@
 // Motion & Fitness prompt). No-op when the active provider is not Raw.
 - (void) startMotionUpdates;
 
+// BG-13 (iOS): snapshot native stream-health counters from the active Raw provider.
+- (NSDictionary*) iosStreamHealth;
+
 
 /**
  * Sets a transform for each coordinate about to be committed (sent or saved for later sync).

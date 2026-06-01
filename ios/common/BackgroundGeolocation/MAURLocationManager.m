@@ -21,6 +21,9 @@
 static MAURLocationManager* sharedCLDelegate = nil;
 static NSString *const TAG = @"MAURLocationManager";
 static NSString *const Domain = @"com.marianhello";
+static BOOL sharedInstanceCreatedOnMainThread = NO;
+static NSString *sharedInstanceCreationThreadLabel = nil;
+static NSDate *sharedInstanceCreationDate = nil;
 
 static MAURLocationAuthorizationStatus MAURAuthorizationStatusFromCLAuthorizationStatus(CLAuthorizationStatus status)
 {
@@ -300,6 +303,11 @@ static MAURLocationAuthorizationStatus MAURAuthorizationStatusFromCLAuthorizatio
     static dispatch_once_t predicate;
     dispatch_once(&predicate, ^{
         void (^createInstance)(void) = ^{
+            sharedInstanceCreatedOnMainThread = [NSThread isMainThread];
+            sharedInstanceCreationThreadLabel = sharedInstanceCreatedOnMainThread
+                ? @"main"
+                : (([NSThread currentThread].name.length > 0) ? [NSThread currentThread].name : @"background");
+            sharedInstanceCreationDate = [NSDate date];
             sharedLocationControllerInstance = [[self alloc] init];
         };
 
@@ -313,6 +321,22 @@ static MAURLocationAuthorizationStatus MAURAuthorizationStatusFromCLAuthorizatio
         }
     });
     return sharedLocationControllerInstance;
+}
+
++ (BOOL)sharedInstanceCreatedOnMainThread
+{
+    return sharedInstanceCreatedOnMainThread;
+}
+
++ (NSString*)sharedInstanceCreationThreadLabel
+{
+    return sharedInstanceCreationThreadLabel ?: @"unknown";
+}
+
++ (NSNumber*)sharedInstanceCreationAgeMs
+{
+    if (!sharedInstanceCreationDate) return nil;
+    return @((long long)([[NSDate date] timeIntervalSinceDate:sharedInstanceCreationDate] * 1000.0));
 }
 
 + (id)allocWithZone:(NSZone *)zone {

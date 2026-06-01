@@ -433,6 +433,22 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
 }
 
 /**
+ * BG-13: iOS native stream-health snapshot.
+ * Returns Raw provider counters so JS telemetry can distinguish real CLLocation
+ * deliveries from keepalive/SLC/rail wake activity and audit the shared
+ * CLLocationManager creation thread.
+ */
+- (void) getIOSStreamHealth:(CDVInvokedUrlCommand*)command
+{
+    NSLog(@"%@ #%@", TAG, @"getIOSStreamHealth");
+    [self.commandDelegate runInBackground:^{
+        NSDictionary *state = [self->facade iosStreamHealth];
+        CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:state ?: @{}];
+        [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+    }];
+}
+
+/**
  * BG-11 (v2.10.0): configure the GPS rail of wake-up CLCircularRegions.
  * Accepts an array of {id, lat, lon, radius} dictionaries. Replaces any
  * previously-registered set. Called from JS at parcours entry once the
