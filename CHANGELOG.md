@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.13.0 (2026-06-01)
+
+**iOS — `MAURRawLocationProvider.m` / `CDVBackgroundGeolocation.pluginInitialize`**
+
+- **Fix** Force `MAURLocationManager` singleton construction and all `CLLocationManager` state access onto the main thread via `dispatch_async(dispatch_get_main_queue(), …)`. Prevents a race where Cordova's worker-thread `checkStatus` call could instantiate `CLLocationManager` off-main, causing OS-level CoreLocation permission checks to silently fail and GPS updates to never start.
+
 ## v2.4.0 — Flanerie fork (2026-05-06)
 
 Forked from [HaylLtd/cordova-background-geolocation-plugin](https://github.com/HaylLtd/cordova-background-geolocation-plugin) v2.3.3. All changes are in `RAW_PROVIDER` only and are purely additive — existing providers and the JS API are unchanged.
