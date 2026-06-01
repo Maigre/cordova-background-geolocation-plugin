@@ -677,52 +677,56 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
                 return;
             }
 
-            BOOL firstTime = (_motionActivityManager == nil);
-            if (firstTime) {
+            if (_motionActivityManager == nil) {
                 _motionActivityManager = [[CMMotionActivityManager alloc] init];
             }
 
-            // Force the iOS "Motion & Fitness" prompt to appear reliably. NOTE:
-            // startActivityUpdatesToQueue alone is NOT a dependable trigger — on a
-            // stationary device it can defer the authorization prompt until the
-            // device actually moves, so a visitor who set the phone down at the
-            // checkmotion screen never sees it (and the app never even appears under
-            // Settings > Mouvement et fitness because no request reached iOS). A
-            // historical query touches the motion store immediately, which presents
-            // the prompt right away; its handler also reports the auth result. We run
-            // it on EVERY call (not gated on firstTime) so a retry / re-onboarding in
-            // the same app session re-triggers the prompt instead of silently bailing
-            // on the old `_motionActivityManager != nil` guard.
-            NSDate *from = [NSDate dateWithTimeIntervalSinceNow:-60];
-            [_motionActivityManager queryActivityStartingFromDate:from
-                                                          toDate:[NSDate date]
-                                                         toQueue:[NSOperationQueue mainQueue]
-                                                     withHandler:^(NSArray<CMMotionActivity *> *activities, NSError *error) {
-                if (error) {
-                    // CMErrorMotionActivityNotAuthorized (etc.) — not authorized. Leave
-                    // the JS checkmotion screen to time out and deep-link to Settings
-                    // (the app now appears there because the request did reach iOS).
-                    DDLogWarn(@"%@ motion query auth error: %ld", TAG, (long)error.code);
-                    return;
-                }
-                // Authorized. Emit an activity immediately so the JS motionAuthorized
-                // flag flips even when the device is stationary and live updates have
-                // not fired yet.
-                CMMotionActivity *last = [activities lastObject];
+            // Why this is shaped the way it is: the iOS "Motion & Fitness" prompt is
+            // presented by startActivityUpdatesToQueue (the prompt-capable call). The
+            // bug: when checkmotion is reached right after the Location "Toujours"
+            // Settings round-trip, the app is still settling (not yet fully
+            // foreground-active) and iOS SILENTLY DROPS the prompt — it never reaches
+            // the system, so the app doesn't even appear under Settings > Mouvement et
+            // fitness. The JS layer re-issues startMotionUpdates (on resume + a timed
+            // retry), but the previous build only re-ran a historical query on those
+            // retries, never the prompt-capable call — so nothing re-presented the
+            // dropped prompt until a clean app relaunch. Fix: re-issue
+            // startActivityUpdatesToQueue on EVERY call while authorization is still
+            // undetermined, so one of the JS retries lands once the app is active.
+            CMAuthorizationStatus auth = [CMMotionActivityManager authorizationStatus];
+            if (auth == CMAuthorizationStatusDenied || auth == CMAuthorizationStatusRestricted) {
+                // User refused (or MDM-restricted). Nothing to (re)request — the JS
+                // checkmotion screen times out and deep-links to Settings.
+                DDLogWarn(@"%@ motion not authorized (status %ld)", TAG, (long)auth);
+                return;
+            }
+
+            // (Re)start live updates. stopActivityUpdates first so repeated calls never
+            // stack duplicate handlers. This is the call that presents the prompt when
+            // NotDetermined and re-presents it once the app is finally active.
+            [_motionActivityManager stopActivityUpdates];
+            [_motionActivityManager startActivityUpdatesToQueue:[NSOperationQueue mainQueue]
+                                                   withHandler:^(CMMotionActivity *activity) {
+                _deviceIsStationary = activity.stationary;
                 MAURActivity *act = [[MAURActivity alloc] init];
-                act.type = last ? (last.stationary ? @"STILL" : last.walking ? @"WALKING" : @"UNKNOWN") : @"UNKNOWN";
-                act.confidence = last ? @(last.confidence) : @(0);
+                act.type = activity.stationary ? @"STILL" : activity.walking ? @"WALKING" : @"UNKNOWN";
+                act.confidence = @(activity.confidence);
                 [self.delegate onActivityChanged:act];
             }];
 
-            // Live updates for ongoing stationary/walking detection — start once.
-            if (firstTime) {
-                [_motionActivityManager startActivityUpdatesToQueue:[NSOperationQueue mainQueue]
-                                                       withHandler:^(CMMotionActivity *activity) {
-                    _deviceIsStationary = activity.stationary;
+            // If already authorized, the live handler may not fire until the device
+            // moves — force an immediate historical query so the JS motionAuthorized
+            // flag flips right away on a stationary phone.
+            if (auth == CMAuthorizationStatusAuthorized) {
+                [_motionActivityManager queryActivityStartingFromDate:[NSDate dateWithTimeIntervalSinceNow:-60]
+                                                              toDate:[NSDate date]
+                                                             toQueue:[NSOperationQueue mainQueue]
+                                                         withHandler:^(NSArray<CMMotionActivity *> *activities, NSError *error) {
+                    if (error) return;
+                    CMMotionActivity *last = [activities lastObject];
                     MAURActivity *act = [[MAURActivity alloc] init];
-                    act.type = activity.stationary ? @"STILL" : activity.walking ? @"WALKING" : @"UNKNOWN";
-                    act.confidence = @(activity.confidence);
+                    act.type = last ? (last.stationary ? @"STILL" : last.walking ? @"WALKING" : @"UNKNOWN") : @"UNKNOWN";
+                    act.confidence = last ? @(last.confidence) : @(0);
                     [self.delegate onActivityChanged:act];
                 }];
             }
