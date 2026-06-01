@@ -220,13 +220,12 @@ public class BackgroundGeolocationFacade {
             @Override
             public void onPermissionGranted() {
                 logger.info("User granted requested permissions");
-                permissionManager.checkPermissions(Arrays.asList(Manifest.permission.POST_NOTIFICATIONS), new PermissionManager.PermissionRequestListener() {
-                    @Override
-                    public void onPermissionGranted() {} // noop
-        
-                    @Override
-                    public void onPermissionDenied(DeniedPermissions deniedPermissions) {} // noop
-                });
+                // NOTE: POST_NOTIFICATIONS is intentionally NOT requested here. Doing
+                // so fired a brief notification prompt right after the location grant,
+                // which then collided with the app's own dedicated notification-
+                // permission onboarding screen. The app (FlanerieAudioMap checknotifications
+                // page) is the single authoritative place that requests and enforces
+                // POST_NOTIFICATIONS, at the right point in its onboarding flow.
 
                 // watch location mode changes
                 registerLocationModeChangeReceiver();

@@ -137,14 +137,12 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
         DDLogDebug(@"%@ visit monitor started", TAG);
     }
 
-    // Always (re-)start motion updates when the manager is not yet running.
-    // On first install the motion dialog can appear while the location dialog
-    // is still visible, causing the user to miss it. Re-triggering on every
-    // start() call ensures the dialog (re-)appears when the user reaches the
-    // checkmotion screen after granting location permission.
-    if (isStarted && _motionActivityManager == nil) {
-        [self startMotionActivityUpdates];
-    }
+    // NOTE: motion activity updates are intentionally NOT started here. Calling
+    // startActivityUpdatesToQueue triggers the iOS "Motion & Fitness" permission
+    // prompt, and doing it inside onStart() makes that prompt collide with the
+    // Location prompt (both appear at once on first install — the user misses one).
+    // The JS layer now starts motion explicitly from the dedicated checkmotion
+    // screen via startMotionUpdates, after Location has been fully granted.
 
     return isStarted;
 }
@@ -592,6 +590,13 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
 - (void) onDestroy {
     DDLogInfo(@"Destroying %@ ", TAG);
     [self onStop:nil];
+}
+
+// Public entry point (called from JS via the facade at the checkmotion screen)
+// so the Motion & Fitness prompt appears on its own, after Location is granted.
+- (void) startMotionUpdates
+{
+    [self startMotionActivityUpdates];
 }
 
 - (void) startMotionActivityUpdates

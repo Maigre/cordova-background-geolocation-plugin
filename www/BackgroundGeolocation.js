@@ -293,6 +293,17 @@ var BackgroundGeolocation = {
       'clearRail');
   },
 
+  // iOS: start CMMotionActivityManager updates, triggering the Motion & Fitness
+  // permission prompt. Called from the checkmotion onboarding screen so the prompt
+  // appears on its own, after Location has been granted — not stacked under the
+  // Location prompt at start(). Android returns errback (action not implemented);
+  // callers should gate on PLATFORM === 'ios'.
+  startMotionUpdates: function (success, failure) {
+    return execWithPromise(success,
+      failure,
+      'startMotionUpdates');
+  },
+
   on: function (event, callbackFn) {
     assert(this.events.indexOf(event) > -1, [TAG, '#on unknown event "' + event + '"']);
     if (!callbackFn) {

@@ -638,6 +638,15 @@ FMDBLogger *sqliteLogger;
     }
 }
 
+- (void) startMotionUpdates
+{
+    if ([locationProvider isKindOfClass:[MAURRawLocationProvider class]]) {
+        [(MAURRawLocationProvider*)locationProvider startMotionUpdates];
+    } else {
+        DDLogWarn(@"%@ startMotionUpdates: active provider is not Raw — ignored", TAG);
+    }
+}
+
 - (void) onRegionWake:(NSDictionary*)payload
 {
     if (_delegate && [_delegate respondsToSelector:@selector(onRegionWake:)]) {

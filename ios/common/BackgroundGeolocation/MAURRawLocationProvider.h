@@ -29,6 +29,12 @@
 // JS path. Safe to call multiple times.
 - (void) clearRail;
 
+// Start CMMotionActivityManager updates (triggers the iOS Motion & Fitness
+// permission prompt on first call). Driven from the JS checkmotion screen so the
+// prompt no longer collides with the Location prompt. Safe to call repeatedly —
+// it no-ops once the manager is running or if the location provider isn't started.
+- (void) startMotionUpdates;
+
 @end
 
 #endif /* MAURRawLocationProvider_h */

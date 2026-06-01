@@ -464,6 +464,21 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
     }];
 }
 
+/**
+ * Start CMMotionActivityManager updates (and the iOS Motion & Fitness prompt).
+ * Called from the JS checkmotion screen so the prompt no longer collides with the
+ * Location prompt at start(). Idempotent at the provider layer.
+ */
+- (void) startMotionUpdates:(CDVInvokedUrlCommand*)command
+{
+    NSLog(@"%@ #%@", TAG, @"startMotionUpdates");
+    [self.commandDelegate runInBackground:^{
+        [self->facade startMotionUpdates];
+        CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+        [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+    }];
+}
+
 - (void) addEventListener:(CDVInvokedUrlCommand*)command
 {
     callbackId = command.callbackId;

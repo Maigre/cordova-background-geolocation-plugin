@@ -51,6 +51,9 @@
 // active provider is not Raw. See MAURRawLocationProvider#configureRail.
 - (NSInteger) configureRail:(NSArray<NSDictionary*>*)regions;
 - (void) clearRail;
+// Start motion-activity updates on the active Raw provider (triggers the iOS
+// Motion & Fitness prompt). No-op when the active provider is not Raw.
+- (void) startMotionUpdates;
 
 
 /**
