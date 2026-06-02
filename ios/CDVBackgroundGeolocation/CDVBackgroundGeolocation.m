@@ -542,6 +542,11 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
             @"appState": @(appState),
             @"activityAvailable": @(available),
             @"pendingUntilActive": @(self->pendingMotionUpdates),
+            // v2.14.6 — whether the location provider had finished starting. The old
+            // startMotionActivityUpdates gated the Core Motion call on this; if it was
+            // false the prompt never fired. The gate is now removed, but report it so we
+            // can confirm whether the fresh-install race was the cause.
+            @"locationStarted": @(self->facade ? [self->facade isStarted] : NO),
         };
         CDVPluginResult *result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:info];
         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
