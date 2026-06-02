@@ -106,6 +106,16 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
     DDLogInfo(@"%@ will start", TAG);
 
     if (!isStarted) {
+        // Request Motion & Fitness in the SAME start() as Location, BEFORE the Location
+        // request below, so both prompts are pending before the user answers either: iOS
+        // queues and shows both (Motion first, then Location). This is the ONLY reliable
+        // timing. Deferring Motion to a separate step AFTER the Location prompt is answered,
+        // in the same launch, gets it SILENTLY SUPPRESSED by iOS — the regression that made
+        // the prompt appear only after a kill+restart (where Location was already granted,
+        // so Motion was again the first/only prompt). This restores the original onStart
+        // behaviour, and being inside the provider guarantees it is configured.
+        [self startMotionActivityUpdates];
+
         isStarted = [locationManager start:outError];
         if (isStarted) {
             [locationManager setShowsBackgroundLocationIndicator:YES];
@@ -155,12 +165,12 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
         DDLogDebug(@"%@ visit monitor started", TAG);
     }
 
-    // NOTE: motion activity updates are intentionally NOT started here. Calling
-    // startActivityUpdatesToQueue triggers the iOS "Motion & Fitness" permission
-    // prompt, and doing it inside onStart() makes that prompt collide with the
-    // Location prompt (both appear at once on first install — the user misses one).
-    // The JS layer now starts motion explicitly from the dedicated checkmotion
-    // screen via startMotionUpdates, after Location has been fully granted.
+    // Motion activity updates are started at the top of this method (before the Location
+    // request), concurrently with Location — see the note there. (They were briefly deferred
+    // to a JS checkmotion step that ran after the Location grant, but iOS suppresses a Motion
+    // request made after the Location prompt is answered in the same launch, so the prompt
+    // never appeared on a fresh install. The JS startMotionUpdates bridge is retained for the
+    // checkmotion verifier / Settings-return re-arm.)
 
     return isStarted;
 }
