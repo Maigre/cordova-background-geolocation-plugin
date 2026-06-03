@@ -112,13 +112,28 @@ static NSString * const TAG = @"CDVBackgroundGeolocation";
         // startUpdatingLocation). dispatch_sync is safe here since we are already on a
         // background thread (runInBackground dispatches to a global queue).
         dispatch_sync(dispatch_get_main_queue(), ^{
+            // Belt-and-braces: re-apply the last JS-provided config on THIS thread, right
+            // before start reads it. configure: (runInBackground / background thread) and
+            // start: (here, main thread) otherwise race on the shared, unsynchronised _config
+            // ivar. On a FRESH install nothing is persisted, so a start: that wins the race
+            // reads the DISTANCE_FILTER default and launches MAURDistanceFilterLocationProvider
+            // instead of MAURRawLocationProvider — and the Motion & Fitness prompt (requested
+            // only in MAURRawLocationProvider.onStart) never fires until a kill+restart makes
+            // the persisted RAW config win. Restoring this configure-before-start ordering
+            // (dropped in v2.14.1) closes the race natively, regardless of JS call ordering.
+            // We keep v2.14.1's fix of returning start's real outcome (not configure's).
+            if (self->config != nil && ![self->facade isStarted]) {
+                // NULL error: a configure hiccup must not block start — facade start re-applies
+                // the full config via onConfigure anyway. (configure: guards `if (outError != nil)`.)
+                [self->facade configure:self->config error:NULL];
+            }
             [self->facade start:&error];
         });
 
-        // Report the actual start outcome. (Previously this re-ran configure: and
-        // returned THAT result, so a start failure could be masked behind a config
-        // success. facade start already applies the full config via onConfigure, so
-        // the extra configure: call was redundant as well as misleading.)
+        // Report the actual start outcome. (Previously this re-ran configure: AFTER start and
+        // returned THAT result, so a start failure could be masked behind a config success.
+        // The re-apply above runs BEFORE start and its result is discarded, so start's real
+        // outcome is what we report.)
         CDVPluginResult* result = nil;
         if (error == nil) {
             [self sendEvent:@"start"];
