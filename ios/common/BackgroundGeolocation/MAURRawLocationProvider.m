@@ -34,6 +34,7 @@ static NSString * const Domain = @"com.marianhello";
     NSDate  *_lastVisitTime;
     CMMotionActivityManager *_motionActivityManager;
     BOOL _deviceIsStationary;
+    BOOL _motionRequestedThisStart; // one-shot guard: request Motion once per start, after Location is answered
     NSInteger _realLocationCount;
     NSInteger _keepaliveCount;
     NSInteger _slcCount;
@@ -106,21 +107,19 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
     DDLogInfo(@"%@ will start", TAG);
 
     if (!isStarted) {
-        // Request Location FIRST, then Motion & Fitness — BOTH within this single start(),
-        // so both prompts are pending before the user answers either (iOS queues them). This
-        // is the proven concurrent mechanism AND the original working ordering: the original
-        // onStart had Motion "stack under" the Location prompt — i.e. Location presented first,
-        // Motion right after. Requesting Motion BEFORE Location (the v2.14.7 ordering) made iOS
-        // briefly present Motion, then preempt it with Location, then re-present Motion — a
-        // confusing double Motion prompt on a fresh install. Location-first removes that flash
-        // while keeping both requests concurrent/pending in the same start(). Do NOT defer
-        // Motion to a later page after Location is granted — being in onStart, pending
-        // alongside Location, is what makes iOS reliably present it.
+        // Request Location here. Motion & Fitness is requested LATER, from the location
+        // auth-change callback (see -locationManager:didChangeAuthorizationStatus:), once the
+        // user has ANSWERED the Location prompt and the app is active again. Requesting Motion
+        // in onStart (alongside Location) made iOS start presenting the Motion prompt while the
+        // Location prompt was also coming up; the Location prompt preempted it and iOS then
+        // re-presented Motion — a confusing DOUBLE Motion prompt from a single request. Firing
+        // Motion only after Location is decided gives a single, clean Motion prompt. This is
+        // still the same launch, in-app, immediately after the Location answer (the original
+        // "Motion stacks under Location" timing) — NOT a deferral to a later page after a
+        // Settings round-trip, which is the §14 failure mode.
+        _motionRequestedThisStart = NO;
         isStarted = [locationManager start:outError];
-        NSLog(@"%@ MOTIONDBG onStart: locationManager start -> isStarted=%d", TAG, isStarted);
-
-        NSLog(@"%@ MOTIONDBG onStart: requesting Motion (after Location start)", TAG);
-        [self startMotionActivityUpdates];
+        NSLog(@"%@ MOTIONDBG onStart: locationManager start -> isStarted=%d (Motion deferred to auth callback)", TAG, isStarted);
 
         if (isStarted) {
             [locationManager setShowsBackgroundLocationIndicator:YES];
@@ -643,6 +642,18 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
             break;
     }
     [self.delegate onAuthorizationChanged:mappedStatus];
+
+    // Request Motion & Fitness now that the user has ANSWERED the Location prompt (any
+    // definitive status — granted or denied; Motion auth is independent of Location). Doing
+    // it here, rather than in onStart, means the Motion prompt is presented alone with the app
+    // active, instead of colliding with / being preempted by the Location prompt (which made
+    // iOS show Motion twice). One-shot per start so a later auth change (e.g. the Toujours
+    // Settings round-trip) doesn't re-request and re-prompt.
+    if (status != kCLAuthorizationStatusNotDetermined && !_motionRequestedThisStart) {
+        _motionRequestedThisStart = YES;
+        NSLog(@"%@ MOTIONDBG requesting Motion (after Location answered, status=%d)", TAG, (int)status);
+        [self startMotionActivityUpdates];
+    }
 }
 
 - (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager
