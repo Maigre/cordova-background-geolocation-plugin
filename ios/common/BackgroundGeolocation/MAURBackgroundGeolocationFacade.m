@@ -648,7 +648,10 @@ FMDBLogger *sqliteLogger;
 
 - (void) startMotionUpdates
 {
-    if ([locationProvider isKindOfClass:[MAURRawLocationProvider class]]) {
+    BOOL isRaw = [locationProvider isKindOfClass:[MAURRawLocationProvider class]];
+    NSLog(@"%@ MOTIONDBG facade startMotionUpdates: provider=%@ isRaw=%d",
+          TAG, NSStringFromClass([locationProvider class]), isRaw);
+    if (isRaw) {
         [(MAURRawLocationProvider*)locationProvider startMotionUpdates];
     } else {
         DDLogWarn(@"%@ startMotionUpdates: active provider is not Raw — ignored", TAG);

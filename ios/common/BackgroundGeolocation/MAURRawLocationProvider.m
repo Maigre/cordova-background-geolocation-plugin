@@ -114,9 +114,11 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
         // the prompt appear only after a kill+restart (where Location was already granted,
         // so Motion was again the first/only prompt). This restores the original onStart
         // behaviour, and being inside the provider guarantees it is configured.
+        NSLog(@"%@ MOTIONDBG onStart: requesting Motion (before Location start)", TAG);
         [self startMotionActivityUpdates];
 
         isStarted = [locationManager start:outError];
+        NSLog(@"%@ MOTIONDBG onStart: locationManager start -> isStarted=%d", TAG, isStarted);
         if (isStarted) {
             [locationManager setShowsBackgroundLocationIndicator:YES];
             _lastRealLocationTime = [NSDate date];
@@ -690,13 +692,20 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
     //     repeatedly tearing down / double-accessing the manager prevented the prompt.
     // startActivityUpdatesToQueue also delivers an initial activity shortly after starting
     // (even on a stationary phone), which flips the JS motionAuthorized flag.
-    if (![CMMotionActivityManager isActivityAvailable]) {
+    // === VERBOSE DIAGNOSTIC LOGGING (for Xcode/Console debugging) ===
+    // Grep the device console for "MOTIONDBG" to follow the whole path in one run.
+    BOOL avail = [CMMotionActivityManager isActivityAvailable];
+    NSLog(@"%@ MOTIONDBG startMotionActivityUpdates called; isActivityAvailable=%d thread=%@",
+          TAG, avail, [NSThread isMainThread] ? @"main" : @"bg");
+    if (!avail) {
         DDLogWarn(@"%@ motion activity not available", TAG);
         return;
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
         CMAuthorizationStatus auth = [CMMotionActivityManager authorizationStatus];
+        NSLog(@"%@ MOTIONDBG authorizationStatus=%ld (0=NotDet 1=Restricted 2=Denied 3=Authorized)",
+              TAG, (long)auth);
         if (auth == CMAuthorizationStatusDenied || auth == CMAuthorizationStatusRestricted) {
             DDLogWarn(@"%@ motion not authorized (status %ld)", TAG, (long)auth);
             return;
@@ -706,14 +715,36 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
             _motionActivityManager = [[CMMotionActivityManager alloc] init];
         }
 
+        NSLog(@"%@ MOTIONDBG calling startActivityUpdatesToQueue (manager=%p)", TAG, _motionActivityManager);
         [_motionActivityManager startActivityUpdatesToQueue:[NSOperationQueue mainQueue]
                                                withHandler:^(CMMotionActivity *activity) {
             if (activity == nil) return;
+            NSLog(@"%@ MOTIONDBG activity update: stationary=%d walking=%d confidence=%ld",
+                  TAG, activity.stationary, activity.walking, (long)activity.confidence);
             _deviceIsStationary = activity.stationary;
             MAURActivity *act = [[MAURActivity alloc] init];
             act.type = activity.stationary ? @"STILL" : activity.walking ? @"WALKING" : @"UNKNOWN";
             act.confidence = @(activity.confidence);
             [self.delegate onActivityChanged:act];
+        }];
+
+        // DIAGNOSTIC query — its handler's error code is the DEFINITIVE "why no prompt"
+        // signal: CMErrorMotionActivityNotAuthorized(105)=user/TCC denied,
+        // CMErrorMotionActivityNotEntitled(107)=missing NSMotionUsageDescription,
+        // CMErrorMotionActivityNotAvailable=no hardware. On success it returns samples
+        // (authorized). Watch "MOTIONDBG queryActivity" in the console.
+        NSLog(@"%@ MOTIONDBG issuing diagnostic queryActivity", TAG);
+        [_motionActivityManager queryActivityStartingFromDate:[NSDate dateWithTimeIntervalSinceNow:-3600]
+                                                      toDate:[NSDate date]
+                                                     toQueue:[NSOperationQueue mainQueue]
+                                                 withHandler:^(NSArray<CMMotionActivity *> *activities, NSError *error) {
+            if (error) {
+                NSLog(@"%@ MOTIONDBG queryActivity ERROR code=%ld domain=%@ desc=%@",
+                      TAG, (long)error.code, error.domain, error.localizedDescription);
+            } else {
+                NSLog(@"%@ MOTIONDBG queryActivity OK: %lu samples (authorized)",
+                      TAG, (unsigned long)activities.count);
+            }
         }];
     });
 }
