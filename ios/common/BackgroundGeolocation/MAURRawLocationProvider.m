@@ -106,19 +106,22 @@ static NSTimeInterval const FORCE_REACQUIRE_GATE_S = 30.0;
     DDLogInfo(@"%@ will start", TAG);
 
     if (!isStarted) {
-        // Request Motion & Fitness in the SAME start() as Location, BEFORE the Location
-        // request below, so both prompts are pending before the user answers either: iOS
-        // queues and shows both (Motion first, then Location). This is the ONLY reliable
-        // timing. Deferring Motion to a separate step AFTER the Location prompt is answered,
-        // in the same launch, gets it SILENTLY SUPPRESSED by iOS — the regression that made
-        // the prompt appear only after a kill+restart (where Location was already granted,
-        // so Motion was again the first/only prompt). This restores the original onStart
-        // behaviour, and being inside the provider guarantees it is configured.
-        NSLog(@"%@ MOTIONDBG onStart: requesting Motion (before Location start)", TAG);
-        [self startMotionActivityUpdates];
-
+        // Request Location FIRST, then Motion & Fitness — BOTH within this single start(),
+        // so both prompts are pending before the user answers either (iOS queues them). This
+        // is the proven concurrent mechanism AND the original working ordering: the original
+        // onStart had Motion "stack under" the Location prompt — i.e. Location presented first,
+        // Motion right after. Requesting Motion BEFORE Location (the v2.14.7 ordering) made iOS
+        // briefly present Motion, then preempt it with Location, then re-present Motion — a
+        // confusing double Motion prompt on a fresh install. Location-first removes that flash
+        // while keeping both requests concurrent/pending in the same start(). Do NOT defer
+        // Motion to a later page after Location is granted — being in onStart, pending
+        // alongside Location, is what makes iOS reliably present it.
         isStarted = [locationManager start:outError];
         NSLog(@"%@ MOTIONDBG onStart: locationManager start -> isStarted=%d", TAG, isStarted);
+
+        NSLog(@"%@ MOTIONDBG onStart: requesting Motion (after Location start)", TAG);
+        [self startMotionActivityUpdates];
+
         if (isStarted) {
             [locationManager setShowsBackgroundLocationIndicator:YES];
             _lastRealLocationTime = [NSDate date];
