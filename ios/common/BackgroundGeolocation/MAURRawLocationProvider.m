@@ -682,33 +682,21 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
 
 - (void) startMotionActivityUpdates
 {
-    // The iOS "Motion & Fitness" prompt is presented on the FIRST access to activity
-    // data via CMMotionActivityManager. This restores the exact pattern that worked in
-    // the original onStart: a single startActivityUpdatesToQueue on the main thread,
-    // nothing else. Everything added during the hang investigation is removed because it
-    // correlated with the prompt NOT presenting:
-    //   - the `isStarted` gate: motion auth is INDEPENDENT of CLLocationManager start;
-    //     on a fresh first run the location provider can still be starting when checkmotion
-    //     fires, so the gate returned BEFORE any Core Motion call → no prompt. (The original
-    //     never hit this: it called motion inline right after isStarted was set.)
-    //   - stopActivityUpdates churn + manager recreation + a parallel queryActivity:
-    //     repeatedly tearing down / double-accessing the manager prevented the prompt.
+    // The iOS "Motion & Fitness" prompt is presented on the FIRST access to activity data
+    // via CMMotionActivityManager. The canonical, reliable pattern (the original onStart's)
+    // is a SINGLE startActivityUpdatesToQueue on the main thread — NOTHING else.
+    // In particular do NOT also issue queryActivityStartingFromDate here: that is a SECOND
+    // first-access to activity data, which makes iOS present the Motion prompt TWICE (the
+    // v2.14.8 diagnostic query was the cause of the double Motion prompt — removed here).
     // startActivityUpdatesToQueue also delivers an initial activity shortly after starting
     // (even on a stationary phone), which flips the JS motionAuthorized flag.
-    // === VERBOSE DIAGNOSTIC LOGGING (for Xcode/Console debugging) ===
-    // Grep the device console for "MOTIONDBG" to follow the whole path in one run.
-    BOOL avail = [CMMotionActivityManager isActivityAvailable];
-    NSLog(@"%@ MOTIONDBG startMotionActivityUpdates called; isActivityAvailable=%d thread=%@",
-          TAG, avail, [NSThread isMainThread] ? @"main" : @"bg");
-    if (!avail) {
+    if (![CMMotionActivityManager isActivityAvailable]) {
         DDLogWarn(@"%@ motion activity not available", TAG);
         return;
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
         CMAuthorizationStatus auth = [CMMotionActivityManager authorizationStatus];
-        NSLog(@"%@ MOTIONDBG authorizationStatus=%ld (0=NotDet 1=Restricted 2=Denied 3=Authorized)",
-              TAG, (long)auth);
         if (auth == CMAuthorizationStatusDenied || auth == CMAuthorizationStatusRestricted) {
             DDLogWarn(@"%@ motion not authorized (status %ld)", TAG, (long)auth);
             return;
@@ -718,36 +706,14 @@ monitoringDidFailForRegion:(nullable CLRegion *)region
             _motionActivityManager = [[CMMotionActivityManager alloc] init];
         }
 
-        NSLog(@"%@ MOTIONDBG calling startActivityUpdatesToQueue (manager=%p)", TAG, _motionActivityManager);
         [_motionActivityManager startActivityUpdatesToQueue:[NSOperationQueue mainQueue]
                                                withHandler:^(CMMotionActivity *activity) {
             if (activity == nil) return;
-            NSLog(@"%@ MOTIONDBG activity update: stationary=%d walking=%d confidence=%ld",
-                  TAG, activity.stationary, activity.walking, (long)activity.confidence);
             _deviceIsStationary = activity.stationary;
             MAURActivity *act = [[MAURActivity alloc] init];
             act.type = activity.stationary ? @"STILL" : activity.walking ? @"WALKING" : @"UNKNOWN";
             act.confidence = @(activity.confidence);
             [self.delegate onActivityChanged:act];
-        }];
-
-        // DIAGNOSTIC query — its handler's error code is the DEFINITIVE "why no prompt"
-        // signal: CMErrorMotionActivityNotAuthorized(105)=user/TCC denied,
-        // CMErrorMotionActivityNotEntitled(107)=missing NSMotionUsageDescription,
-        // CMErrorMotionActivityNotAvailable=no hardware. On success it returns samples
-        // (authorized). Watch "MOTIONDBG queryActivity" in the console.
-        NSLog(@"%@ MOTIONDBG issuing diagnostic queryActivity", TAG);
-        [_motionActivityManager queryActivityStartingFromDate:[NSDate dateWithTimeIntervalSinceNow:-3600]
-                                                      toDate:[NSDate date]
-                                                     toQueue:[NSOperationQueue mainQueue]
-                                                 withHandler:^(NSArray<CMMotionActivity *> *activities, NSError *error) {
-            if (error) {
-                NSLog(@"%@ MOTIONDBG queryActivity ERROR code=%ld domain=%@ desc=%@",
-                      TAG, (long)error.code, error.domain, error.localizedDescription);
-            } else {
-                NSLog(@"%@ MOTIONDBG queryActivity OK: %lu samples (authorized)",
-                      TAG, (unsigned long)activities.count);
-            }
         }];
     });
 }
