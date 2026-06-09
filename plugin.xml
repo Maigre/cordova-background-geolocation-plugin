@@ -2,7 +2,7 @@
 <plugin xmlns="http://www.phonegap.com/ns/plugins/1.0"
     xmlns:android="http://schemas.android.com/apk/res/android"
     id="cordova-background-geolocation-plugin"
-    version="2.14.12">
+    version="2.15.0">
     <name>cordova-background-geolocation-plugin</name>
     <description>Cordova Background Geolocation Plugin</description>
     <license>Apache-2.0</license>
@@ -93,6 +93,7 @@
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/provider/ProviderDelegate.java" target-dir="src/com/marianhello/bgloc/provider" />
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/provider/RawLocationProvider.java" target-dir="src/com/marianhello/bgloc/provider" />
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/provider/FusedLocationProviderHelper.java" target-dir="src/com/marianhello/bgloc/provider" />
+        <source-file src="android/common/src/main/java/com/marianhello/bgloc/provider/GeofenceRailReceiver.java" target-dir="src/com/marianhello/bgloc/provider" />
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/ResourceResolver.java" target-dir="src/com/marianhello/bgloc" />
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/service/LocationServiceImpl.java" target-dir="src/com/marianhello/bgloc/service" />
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/service/LocationServiceInfoImpl.java" target-dir="src/com/marianhello/bgloc/service" />
@@ -168,6 +169,12 @@
                   <action android:name="android.intent.action.BOOT_COMPLETED" />
                </intent-filter>
             </receiver>
+            <!-- v2.15.0 D2 — Android GPS wake-rail. Manifest-registered so a
+                 geofence crossing can wake the process from a frozen/cached state. -->
+            <receiver
+                  android:name="com.marianhello.bgloc.provider.GeofenceRailReceiver"
+                  android:enabled="true"
+                  android:exported="false" />
             <uses-library android:name="org.apache.http.legacy" android:required="true" />
         </config-file>
 
@@ -181,6 +188,10 @@
             <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
             <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
             <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+            <!-- v2.15.0 D2 — required for geofence transitions to fire while the
+                 app is backgrounded (Android 10+). The walk already hard-blocks
+                 onboarding on "Allow all the time", so this is already granted. -->
+            <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
             <uses-permission android:name="android.permission.ACCESS_LOCATION_EXTRA_COMMANDS" />
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.WAKE_LOCK" />

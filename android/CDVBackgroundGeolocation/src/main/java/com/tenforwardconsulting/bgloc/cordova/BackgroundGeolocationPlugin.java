@@ -24,6 +24,7 @@ import com.marianhello.bgloc.cordova.PluginRegistry;
 import com.marianhello.bgloc.cordova.headless.JsEvaluatorTaskRunner;
 import com.marianhello.bgloc.data.BackgroundActivity;
 import com.marianhello.bgloc.data.BackgroundLocation;
+import com.marianhello.bgloc.provider.GeofenceRailReceiver;
 import com.marianhello.bgloc.provider.RawLocationProvider;
 import com.marianhello.logging.LogEntry;
 import com.marianhello.logging.LoggerManager;
@@ -81,6 +82,14 @@ public class BackgroundGeolocationPlugin extends CordovaPlugin implements Plugin
     // fused stale ignored) so the webapp can observe how often FLP fills in
     // for Raw stalls during the walk.
     public static final String ACTION_GET_LOCATION_DISPATCH_STATS = "getLocationDispatchStats";
+    // v2.15.0 D1 — JS-liveness watchdog. JS heartbeat + walk gate + stats.
+    public static final String ACTION_ACK_ALIVE          = "ackAlive";
+    public static final String ACTION_SET_WALK_ACTIVE    = "setWalkActive";
+    public static final String ACTION_GET_WATCHDOG_STATS = "getWatchdogStats";
+    // v2.15.0 D2 — Android geofence wake-rail (Android analog of the iOS rail).
+    public static final String ACTION_CONFIGURE_ANDROID_RAIL = "configureAndroidRail";
+    public static final String ACTION_CLEAR_ANDROID_RAIL     = "clearAndroidRail";
+    public static final String ACTION_GET_RAIL_STATS         = "getRailStats";
 
     private BackgroundGeolocationFacade facade;
 
@@ -145,6 +154,15 @@ public class BackgroundGeolocationPlugin extends CordovaPlugin implements Plugin
         logger = LoggerManager.getLogger(BackgroundGeolocationPlugin.class);
         facade = new BackgroundGeolocationFacade(this.getContext(), this);
         facade.resume();
+
+        // v2.15.0 D1/D2 — hand the WebView to the provider so the background
+        // alarm/geofence receivers can re-assert renderer priority (the lever
+        // that keeps the JS event loop schedulable when the screen is off).
+        try {
+            if (this.webView != null) RawLocationProvider.setWebView(this.webView.getView());
+        } catch (Throwable t) {
+            logger.warn("Could not cache WebView for renderer nudge: {}", t.getMessage());
+        }
     }
 
     public boolean execute(String action, final JSONArray data, final CallbackContext callbackContext) {
@@ -412,6 +430,64 @@ public class BackgroundGeolocationPlugin extends CordovaPlugin implements Plugin
                 callbackContext.success(stats);
             } catch (JSONException e) {
                 callbackContext.sendPluginResult(ErrorPluginResult.from("getLocationDispatchStats failed", e, PluginException.JSON_ERROR));
+            }
+            return true;
+        } else if (ACTION_ACK_ALIVE.equals(action)) {
+            // D1 — JS liveness heartbeat. Cheap; called on every processed real fix.
+            RawLocationProvider.ackAlive(context);
+            callbackContext.success();
+            return true;
+        } else if (ACTION_SET_WALK_ACTIVE.equals(action)) {
+            // D1 — gate the watchdog to active walks only.
+            boolean active = data.optBoolean(0, false);
+            RawLocationProvider.setWalkActive(context, active);
+            callbackContext.success();
+            return true;
+        } else if (ACTION_GET_WATCHDOG_STATS.equals(action)) {
+            try {
+                JSONObject stats = new JSONObject();
+                long now = System.currentTimeMillis();
+                long lastAck = RawLocationProvider.sLastJsAckMs;
+                long lastNotify = RawLocationProvider.sLastWatchdogNotifyMs;
+                stats.put("walkActive",          RawLocationProvider.sWalkActive);
+                stats.put("lastAckMs",           lastAck);
+                stats.put("lastAckAgeMs",        lastAck > 0 ? (now - lastAck) : -1);
+                stats.put("notifyCount",         RawLocationProvider.sWatchdogNotifyCount);
+                stats.put("lastNotifyMs",        lastNotify);
+                stats.put("lastNotifyAgeMs",     lastNotify > 0 ? (now - lastNotify) : -1);
+                stats.put("rendererNudgeCount",  RawLocationProvider.sRendererNudgeCount);
+                callbackContext.success(stats);
+            } catch (JSONException e) {
+                callbackContext.sendPluginResult(ErrorPluginResult.from("getWatchdogStats failed", e, PluginException.JSON_ERROR));
+            }
+            return true;
+        } else if (ACTION_CONFIGURE_ANDROID_RAIL.equals(action)) {
+            // D2 — register the geofence wake-rail. data[0] = [{id,lat,lon,radius}].
+            try {
+                JSONArray regions = data.optJSONArray(0);
+                int count = GeofenceRailReceiver.configure(context, regions);
+                callbackContext.success(count);
+            } catch (Exception e) {
+                callbackContext.sendPluginResult(ErrorPluginResult.from("configureAndroidRail failed", e, PluginException.JSON_ERROR));
+            }
+            return true;
+        } else if (ACTION_CLEAR_ANDROID_RAIL.equals(action)) {
+            GeofenceRailReceiver.clear(context);
+            callbackContext.success();
+            return true;
+        } else if (ACTION_GET_RAIL_STATS.equals(action)) {
+            try {
+                JSONObject stats = new JSONObject();
+                long now = System.currentTimeMillis();
+                long lastWake = RawLocationProvider.sLastRailWakeMs;
+                stats.put("wakeCount",        RawLocationProvider.sRailWakeCount);
+                stats.put("lastWakeMs",       lastWake);
+                stats.put("lastWakeAgeMs",    lastWake > 0 ? (now - lastWake) : -1);
+                stats.put("lastRegionId",     RawLocationProvider.sLastRailRegionId);
+                stats.put("lastTransition",   RawLocationProvider.sLastRailTransition);
+                callbackContext.success(stats);
+            } catch (JSONException e) {
+                callbackContext.sendPluginResult(ErrorPluginResult.from("getRailStats failed", e, PluginException.JSON_ERROR));
             }
             return true;
         }

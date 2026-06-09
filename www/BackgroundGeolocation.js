@@ -302,6 +302,43 @@ var BackgroundGeolocation = {
       'clearRail');
   },
 
+  // ───────── v2.15.0 D1 — Android JS-liveness watchdog ─────────
+  // ackAlive: JS heartbeat — call on every processed real fix so the native
+  // AlarmManager-backed watchdog knows the JS event loop is still running.
+  // Android-only; iOS errbacks (JS stays alive via the location bg-mode).
+  ackAlive: function (success, failure) {
+    return execWithPromise(success, failure, 'ackAlive');
+  },
+  // setWalkActive: gate the watchdog to active walks (true at parcours start,
+  // false at walk-end/rearm). Android-only.
+  setWalkActive: function (active, success, failure) {
+    return execWithPromise(success, failure, 'setWalkActive', [!!active]);
+  },
+  // getWatchdogStats: {walkActive, lastAckMs, lastAckAgeMs, notifyCount,
+  // lastNotifyMs, lastNotifyAgeMs, rendererNudgeCount}. Poll on resume to log
+  // whether the net fired during a freeze. Android-only.
+  getWatchdogStats: function (success, failure) {
+    return execWithPromise(success, failure, 'getWatchdogStats');
+  },
+
+  // ───────── v2.15.0 D2 — Android geofence wake-rail ─────────
+  // configureAndroidRail: register a coarse geofence at each transition
+  // midpoint (same {id,lat,lon,radius} array computeGpsRail() builds for iOS).
+  // A crossing wakes the process + re-asserts renderer priority so the frozen
+  // JS loop resumes and runs the polygon trigger. Wakeup-only — never starts
+  // audio. Android-only; callers gate on PLATFORM === 'android'.
+  configureAndroidRail: function (regions, success, failure) {
+    return execWithPromise(success, failure, 'configureAndroidRail', [regions || []]);
+  },
+  clearAndroidRail: function (success, failure) {
+    return execWithPromise(success, failure, 'clearAndroidRail');
+  },
+  // getRailStats: {wakeCount, lastWakeMs, lastWakeAgeMs, lastRegionId,
+  // lastTransition}. Poll on resume for rail-wake telemetry. Android-only.
+  getRailStats: function (success, failure) {
+    return execWithPromise(success, failure, 'getRailStats');
+  },
+
   // iOS: start CMMotionActivityManager updates, triggering the Motion & Fitness
   // permission prompt. Called from the checkmotion onboarding screen so the prompt
   // appears on its own, after Location has been granted — not stacked under the

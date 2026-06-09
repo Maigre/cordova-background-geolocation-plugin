@@ -24,6 +24,12 @@ public class NotificationHelper {
     public static final String SYNC_CHANNEL_NAME = "Sync Service";
     public static final String SYNC_CHANNEL_DESCRIPTION = "Shows sync progress";
 
+    // v2.15.0 D1 — high-importance channel for the JS-liveness watchdog recovery
+    // notification (heads-up + vibration). Distinct from the LOW service channel.
+    public static final String WATCHDOG_CHANNEL_ID = "bgloc-watchdog";
+    public static final String WATCHDOG_CHANNEL_NAME = "Reprise de promenade";
+    public static final String WATCHDOG_CHANNEL_DESCRIPTION = "Vous invite à rouvrir l'app si la promenade s'est mise en pause";
+
     public static class NotificationFactory {
         private Context mContext;
         private ResourceResolver mResolver;
@@ -102,6 +108,16 @@ public class NotificationHelper {
             notificationManager.createNotificationChannel(createServiceChannel(appName));
             notificationManager.createNotificationChannel(createSyncChannel());
             notificationManager.createNotificationChannel(createAndroidPermissionsChannel(appName));
+            notificationManager.createNotificationChannel(createWatchdogChannel());
+        }
+    }
+
+    // v2.15.0 D1 — idempotent; safe to call lazily from the background watchdog
+    // path the first time it needs to post.
+    public static void registerWatchdogChannel(Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            android.app.NotificationManager notificationManager = (android.app.NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (notificationManager != null) notificationManager.createNotificationChannel(createWatchdogChannel());
         }
     }
 
@@ -143,6 +159,14 @@ public class NotificationHelper {
     public static NotificationChannel createAndroidPermissionsChannel(CharSequence name ){
         NotificationChannel channel = new NotificationChannel(ANDROID_PERMISSIONS_CHANNEL_ID, name, NotificationManager.IMPORTANCE_HIGH);
         channel.enableVibration(false);
+        return channel;
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.O)
+    public static NotificationChannel createWatchdogChannel(){
+        NotificationChannel channel = new NotificationChannel(WATCHDOG_CHANNEL_ID, WATCHDOG_CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH);
+        channel.setDescription(WATCHDOG_CHANNEL_DESCRIPTION);
+        channel.enableVibration(true);
         return channel;
     }
 }
