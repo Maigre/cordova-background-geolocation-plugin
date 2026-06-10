@@ -2,7 +2,7 @@
 <plugin xmlns="http://www.phonegap.com/ns/plugins/1.0"
     xmlns:android="http://schemas.android.com/apk/res/android"
     id="cordova-background-geolocation-plugin"
-    version="2.15.0">
+    version="2.15.1">
     <name>cordova-background-geolocation-plugin</name>
     <description>Cordova Background Geolocation Plugin</description>
     <license>Apache-2.0</license>
@@ -94,6 +94,7 @@
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/provider/RawLocationProvider.java" target-dir="src/com/marianhello/bgloc/provider" />
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/provider/FusedLocationProviderHelper.java" target-dir="src/com/marianhello/bgloc/provider" />
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/provider/GeofenceRailReceiver.java" target-dir="src/com/marianhello/bgloc/provider" />
+        <source-file src="android/common/src/main/java/com/marianhello/bgloc/provider/WatchdogRecoveryActivity.java" target-dir="src/com/marianhello/bgloc/provider" />
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/ResourceResolver.java" target-dir="src/com/marianhello/bgloc" />
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/service/LocationServiceImpl.java" target-dir="src/com/marianhello/bgloc/service" />
         <source-file src="android/common/src/main/java/com/marianhello/bgloc/service/LocationServiceInfoImpl.java" target-dir="src/com/marianhello/bgloc/service" />
@@ -175,6 +176,18 @@
                   android:name="com.marianhello.bgloc.provider.GeofenceRailReceiver"
                   android:enabled="true"
                   android:exported="false" />
+            <!-- v2.15.1 tier-1.5 — D1 auto-foreground recovery (loan fleet).
+                 Black over-keyguard activity that thaws a frozen renderer with
+                 no walker interaction; launched only with the overlay grant. -->
+            <activity
+                  android:name="com.marianhello.bgloc.provider.WatchdogRecoveryActivity"
+                  android:excludeFromRecents="true"
+                  android:exported="false"
+                  android:launchMode="singleInstance"
+                  android:showWhenLocked="true"
+                  android:turnScreenOn="true"
+                  android:taskAffinity=""
+                  android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
             <uses-library android:name="org.apache.http.legacy" android:required="true" />
         </config-file>
 
@@ -198,6 +211,11 @@
             <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
             <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
             <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+            <!-- v2.15.1 tier-1.5 — "Display over other apps". Never requested at
+                 runtime from visitors; granted per-device on the loan fleet
+                 (devmode flow / adb appops). Its presence is what makes the
+                 watchdog's background activity launch legal (BAL exemption). -->
+            <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
             <uses-permission android:name="android.hardware.location" />
         </config-file>
         <config-file target="res/xml/config.xml" parent="/*">

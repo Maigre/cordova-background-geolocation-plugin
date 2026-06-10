@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.location.Criteria;
 import android.location.Location;
@@ -22,6 +23,7 @@ import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.view.View;
+import android.webkit.ValueCallback;
 import android.webkit.WebView;
 import java.lang.ref.WeakReference;
 
@@ -94,12 +96,52 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
     private static final long JS_STALL_MS               = 90_000;
     private static final long WATCHDOG_NOTIFY_MIN_GAP_MS = 180_000;
     private static final int  WATCHDOG_NOTIFICATION_ID   = 9101;
+    // v2.15.1 — cap consecutive tier-2 notifications without an intervening JS
+    // ack: after this many unanswered nudges more vibration won't help (and a
+    // deliberately abandoned walk must not harass the walker every 3 min).
+    private static final int  WATCHDOG_MAX_NOTIFY_PER_STALL = 3;
     public static volatile boolean sWalkActive          = false;
     public static volatile long    sLastJsAckMs         = 0;
     private static volatile long   sWatchdogPendingSince = 0;
     public static volatile long    sWatchdogNotifyCount = 0;
     public static volatile long    sLastWatchdogNotifyMs = 0;
     public static volatile long    sRendererNudgeCount  = 0;
+    public static volatile int     sNotifySinceAck      = 0;
+
+    // v2.15.1 — walk-active gate persisted to SharedPreferences so the watchdog
+    // survives a process kill mid-walk (OEM "put to sleep" / OOM). The statics
+    // above die with the process; the START_STICKY service restart re-runs the
+    // provider's onStart, which restores the gate from prefs — without this the
+    // watchdog is disarmed in exactly the failure mode it exists to report.
+    private static final String WATCHDOG_PREFS   = "bgloc_watchdog";
+    private static final String PREF_WALK_ACTIVE = "walkActive";
+    public static volatile boolean sWalkActiveRestored = false;
+
+    // v2.15.1 — direct renderer-liveness probe: evaluateJavascript("1") with a
+    // callback. An answer proves the renderer runs JS (so a stale GPS-fix ack is
+    // a blackout, not a freeze — don't notify); a previous probe left unanswered
+    // for a full alarm cycle confirms the freeze. GPS-independent, unlike acks.
+    public static volatile long sProbeSentCount    = 0;
+    public static volatile long sProbeAnswerCount  = 0;
+    public static volatile long sLastProbeSentMs   = 0;
+    public static volatile long sLastProbeAnswerMs = 0;
+
+    // v2.15.1 — tier-1.5 auto-foreground recovery (loan fleet). With the
+    // "Display over other apps" grant a background activity start is legal
+    // (FGS alone stopped being enough on Android 10): WatchdogRecoveryActivity
+    // briefly turns the screen on over the keyguard, the process leaves the
+    // cached tier, the renderer thaws — no walker interaction. Tried before
+    // the notification, capped per stall so a pathological OEM can't strobe
+    // the pocket; the notification stays as the human fallback.
+    private static final int  WATCHDOG_MAX_AUTOFG_PER_STALL = 2;
+    public static volatile long sAutoFgCount          = 0;
+    public static volatile long sLastAutoFgMs         = 0;
+    public static volatile int  sAutoFgSinceAck       = 0;
+    public static volatile long sAutoFgLastRecoveryMs = 0;   // >0 ms-to-ack; -1 attempted, no recovery
+
+    // Static logger for the watchdog's static entry points (instance `logger`
+    // comes from AbstractLocationProvider and isn't reachable from them).
+    private static final org.slf4j.Logger sLog = LoggerManager.getLogger(RawLocationProvider.class);
 
     // ───────── v2.15.0 — D2 Android geofence wake-rail ─────────
     public static volatile long    sRailWakeCount       = 0;
@@ -194,28 +236,94 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
     /** Best-effort: keep the WebView renderer at IMPORTANT priority (un-frozen)
      *  even while the screen is off. Mirrors power-opt PO-10 but callable from a
      *  background Context with no plugin reference. No-op below API 24 or if the
-     *  handle is gone. Runs on the UI thread. */
+     *  handle is gone. Runs on the UI thread.
+     *  v2.15.1: also onResume() + resumeTimers() — legal anytime, no-ops when
+     *  already resumed, and cover any path that left the Cordova/WebView pause
+     *  layer engaged (the priority re-assert alone can't undo that). */
     public static void nudgeRenderer() {
         final WeakReference<View> ref = sWebViewRef;
-        if (ref == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
+        if (ref == null) return;
         final View v = ref.get();
         if (!(v instanceof WebView)) return;
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override public void run() {
                 try {
-                    ((WebView) v).setRendererPriorityPolicy(
-                        WebView.RENDERER_PRIORITY_IMPORTANT, false);
+                    WebView wv = (WebView) v;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        wv.setRendererPriorityPolicy(
+                            WebView.RENDERER_PRIORITY_IMPORTANT, false);
+                    }
+                    wv.onResume();
+                    wv.resumeTimers();
                     sRendererNudgeCount++;
                 } catch (Throwable ignored) {}
             }
         });
     }
 
-    /** JS calls this on every processed real fix (its liveness heartbeat).
+    /** v2.15.1 — send a renderer-liveness probe. The callback landing updates
+     *  sLastProbeAnswerMs; on a frozen renderer the evaluate queues silently and
+     *  only answers at thaw, so "previous probe unanswered" = freeze confirmed.
+     *  Posted to the UI thread (evaluateJavascript requirement). */
+    public static void sendRendererProbe() {
+        final WeakReference<View> ref = sWebViewRef;
+        if (ref == null) return;
+        final View v = ref.get();
+        if (!(v instanceof WebView)) return;
+        new Handler(Looper.getMainLooper()).post(new Runnable() {
+            @Override public void run() {
+                try {
+                    sProbeSentCount++;
+                    sLastProbeSentMs = System.currentTimeMillis();
+                    ((WebView) v).evaluateJavascript("1", new ValueCallback<String>() {
+                        @Override public void onReceiveValue(String value) {
+                            sProbeAnswerCount++;
+                            sLastProbeAnswerMs = System.currentTimeMillis();
+                        }
+                    });
+                } catch (Throwable ignored) {}
+            }
+        });
+    }
+
+    private static void persistWalkActive(Context ctx, boolean active) {
+        try {
+            SharedPreferences prefs = ctx.getApplicationContext()
+                .getSharedPreferences(WATCHDOG_PREFS, Context.MODE_PRIVATE);
+            prefs.edit().putBoolean(PREF_WALK_ACTIVE, active).apply();
+        } catch (Throwable ignored) {}
+    }
+
+    /** v2.15.1 — re-arm the watchdog after a process restart mid-walk. Primes
+     *  the ack clock to "now": if JS is actually alive its acks keep the clock
+     *  fresh and nothing fires; if the renderer died with the old process, the
+     *  clock stalls and the normal tier-1/tier-2 escalation reaches the walker.
+     *  Returns true only when a persisted active walk was restored. */
+    public static boolean restoreWalkStateIfNeeded(Context ctx) {
+        if (sWalkActive) return false;
+        boolean persisted = false;
+        try {
+            persisted = ctx.getApplicationContext()
+                .getSharedPreferences(WATCHDOG_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(PREF_WALK_ACTIVE, false);
+        } catch (Throwable ignored) {}
+        if (!persisted) return false;
+        sWalkActive = true;
+        sLastJsAckMs = System.currentTimeMillis();
+        sWatchdogPendingSince = 0;
+        sWalkActiveRestored = true;
+        sLog.info("Watchdog: restored active-walk gate from prefs (process restarted mid-walk)");
+        return true;
+    }
+
+    /** JS calls this on every processed real fix AND on a ~25 s timer (v2.15.1
+     *  #2 — so a GPS blackout with a live JS loop doesn't read as a freeze).
      *  Resets the stall clock; clears any pending watchdog + dismisses a
      *  recovery notification if JS came back on its own. */
     public static void ackAlive(Context ctx) {
         sLastJsAckMs = System.currentTimeMillis();
+        sNotifySinceAck = 0;
+        sAutoFgSinceAck = 0;
         if (sWatchdogPendingSince != 0) {
             sWatchdogPendingSince = 0;
             cancelWatchdogNotification(ctx);
@@ -224,9 +332,15 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
 
     /** Walk lifecycle gate — the watchdog only escalates while a walk is active.
      *  Starting a walk primes the ack clock so we don't false-fire before the
-     *  first fix; ending a walk dismisses any pending notification. */
+     *  first fix; ending a walk dismisses any pending notification.
+     *  v2.15.1: persisted, so a process kill mid-walk doesn't disarm the
+     *  watchdog (see restoreWalkStateIfNeeded). */
     public static void setWalkActive(Context ctx, boolean active) {
         sWalkActive = active;
+        sWalkActiveRestored = false;
+        sNotifySinceAck = 0;
+        sAutoFgSinceAck = 0;
+        persistWalkActive(ctx, active);
         if (active) {
             sLastJsAckMs = System.currentTimeMillis();
             sWatchdogPendingSince = 0;
@@ -243,11 +357,16 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
         } catch (Throwable ignored) {}
     }
 
-    /** Two-tier escalation. Tier 1 (first detection): nudge the renderer and
-     *  wait one cycle — a soft-throttled loop recovers silently. Tier 2
-     *  (sustained stall, throttled): vibrate + heads-up notification so the
-     *  walker brings the app to the foreground. */
-    private void maybeFireWatchdog(Context ctx) {
+    /** Two-tier escalation. Tier 1 (first detection): nudge the renderer, send
+     *  a liveness probe, and wait one cycle — a soft-throttled loop recovers
+     *  silently. Tier 2 (sustained stall, throttled + capped): vibrate +
+     *  heads-up notification so the walker brings the app to the foreground.
+     *  v2.15.1: static (callable from receivers on a reborn process) and gated
+     *  on the probe — if the previous probe was answered, the renderer
+     *  demonstrably runs JS (GPS blackout, not a freeze): keep nudging, don't
+     *  ring. An unanswered previous probe — or no WebView to probe at all —
+     *  confirms the freeze. */
+    private static void maybeFireWatchdog(Context ctx) {
         if (!sWalkActive) return;
         long now = System.currentTimeMillis();
         long ack = sLastJsAckMs;
@@ -257,19 +376,60 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
             sWatchdogPendingSince = 0;
             return;
         }
-        // JS appears stalled. Always try the silent renderer nudge first.
+        // JS appears stalled. Capture the previous probe state BEFORE sending a
+        // new one (both this check and the answer callback run on the main
+        // thread, so neither can land mid-method).
+        long prevProbeSent = sLastProbeSentMs;
+        boolean prevProbeAnswered = prevProbeSent > 0 && sLastProbeAnswerMs >= prevProbeSent;
         nudgeRenderer();
+        sendRendererProbe();
         if (sWatchdogPendingSince == 0) {           // tier 1 — give the nudge a cycle
             sWatchdogPendingSince = now;
             return;
         }
+        if (prevProbeAnswered) return;              // renderer alive — ack stall is GPS-side
+        // tier 1.5 — silent auto-recovery (loan fleet): launch the black
+        // over-keyguard recovery activity instead of ringing. NOT throttled by
+        // the notification gap — if it doesn't bring acks back by the next
+        // alarm cycle we retry once, then fall through to the notification.
+        if (tryAutoForeground(ctx)) return;
         if (now - sLastWatchdogNotifyMs < WATCHDOG_NOTIFY_MIN_GAP_MS) return; // throttle
+        if (sNotifySinceAck >= WATCHDOG_MAX_NOTIFY_PER_STALL) return;         // cap
         postWatchdogNotification(ctx, stall);       // tier 2
         sWatchdogNotifyCount++;
+        sNotifySinceAck++;
         sLastWatchdogNotifyMs = now;
     }
 
-    private void postWatchdogNotification(Context ctx, long stallMs) {
+    /** v2.15.1 tier 1.5 — background-launch the recovery activity. Requires the
+     *  "Display over other apps" grant (the documented BAL exemption; granted
+     *  per-device on the loan fleet via the devmode flow / provisioning).
+     *  Returns false when ungranted, capped, or the launch failed — the caller
+     *  then escalates to the notification. */
+    private static boolean tryAutoForeground(Context ctx) {
+        if (sAutoFgSinceAck >= WATCHDOG_MAX_AUTOFG_PER_STALL) return false;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                    && !android.provider.Settings.canDrawOverlays(ctx)) {
+                return false;
+            }
+            Context app = ctx.getApplicationContext();
+            Intent intent = new Intent(app, WatchdogRecoveryActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+            app.startActivity(intent);
+            sAutoFgCount++;
+            sAutoFgSinceAck++;
+            sLastAutoFgMs = System.currentTimeMillis();
+            sLog.warn("Watchdog: auto-foreground recovery launched (attempt {} this stall)", sAutoFgSinceAck);
+            return true;
+        } catch (Throwable t) {
+            sLog.error("Watchdog auto-foreground failed: {}", t.getMessage());
+            return false;
+        }
+    }
+
+    private static void postWatchdogNotification(Context ctx, long stallMs) {
         Context app = ctx.getApplicationContext();
         // Vibrate directly (no permission needed) so the cue lands even if
         // POST_NOTIFICATIONS was denied on Android 13+.
@@ -307,9 +467,9 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
                 b.setContentIntent(PendingIntent.getActivity(app, 9102, launch, flags));
             }
             nm.notify(WATCHDOG_NOTIFICATION_ID, b.build());
-            logger.warn("Watchdog: JS stalled {}ms during active walk — posted recovery notification", stallMs);
+            sLog.warn("Watchdog: JS stalled {}ms during active walk — posted recovery notification", stallMs);
         } catch (Throwable t) {
-            logger.error("Watchdog notification failed: {}", t.getMessage());
+            sLog.error("Watchdog notification failed: {}", t.getMessage());
         }
     }
 
@@ -325,10 +485,23 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
         sLastRailWakeMs = System.currentTimeMillis();
         sLastRailRegionId = regionId;
         sLastRailTransition = transition;
+        // v2.15.1 #1 — this manifest receiver may be what reanimates a process
+        // the OS killed mid-walk. Restore the persisted walk gate; if the
+        // provider isn't even running yet, the old process (and its WebView) is
+        // gone for certain — JS cannot come back on its own, so post the
+        // recovery notification right away. The crossing is also the best
+        // moment for it: the walker is at a zone boundary, missing audio NOW.
+        boolean reborn = restoreWalkStateIfNeeded(ctx) && sActive == null;
+        if (reborn) {
+            postWatchdogNotification(ctx, -1);
+            sWatchdogNotifyCount++;
+            sNotifySinceAck++;
+            sLastWatchdogNotifyMs = System.currentTimeMillis();
+        }
         nudgeRenderer();
         RawLocationProvider self = sActive;
         if (self != null && self.isStarted) {
-            self.maybeFireWatchdog(ctx);
+            maybeFireWatchdog(ctx);
         }
     }
 
@@ -395,6 +568,10 @@ public class RawLocationProvider extends AbstractLocationProvider implements Loc
             locationManager.requestLocationUpdates(provider, mConfig.getInterval(), mConfig.getDistanceFilter(), this);
             isStarted = true;
             sActive = this;   // D2 rail-wake entry point delivers fixes through this instance
+            // v2.15.1 #1 — if the service was START_STICKY-restarted after a
+            // process kill mid-walk, the in-memory walk gate is gone: re-arm
+            // the watchdog from prefs so the kill doesn't end the walk silently.
+            restoreWalkStateIfNeeded(mContext);
             _lastRealLocationTime = SystemClock.elapsedRealtime();
             _keepaliveHandler = new Handler(Looper.getMainLooper());
             _keepaliveTick = new Runnable() {

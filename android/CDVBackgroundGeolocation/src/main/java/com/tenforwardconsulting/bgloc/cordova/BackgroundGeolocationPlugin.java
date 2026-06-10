@@ -456,6 +456,18 @@ public class BackgroundGeolocationPlugin extends CordovaPlugin implements Plugin
                 stats.put("lastNotifyMs",        lastNotify);
                 stats.put("lastNotifyAgeMs",     lastNotify > 0 ? (now - lastNotify) : -1);
                 stats.put("rendererNudgeCount",  RawLocationProvider.sRendererNudgeCount);
+                // v2.15.1 — renderer probe + process-restart restore diagnostics.
+                long lastProbeAns = RawLocationProvider.sLastProbeAnswerMs;
+                stats.put("probeSentCount",      RawLocationProvider.sProbeSentCount);
+                stats.put("probeAnswerCount",    RawLocationProvider.sProbeAnswerCount);
+                stats.put("lastProbeAnswerAgeMs", lastProbeAns > 0 ? (now - lastProbeAns) : -1);
+                stats.put("notifySinceAck",      RawLocationProvider.sNotifySinceAck);
+                stats.put("walkActiveRestored",  RawLocationProvider.sWalkActiveRestored);
+                // v2.15.1 tier-1.5 — auto-foreground recovery diagnostics.
+                long lastAutoFg = RawLocationProvider.sLastAutoFgMs;
+                stats.put("autoForegroundCount",  RawLocationProvider.sAutoFgCount);
+                stats.put("lastAutoForegroundAgeMs", lastAutoFg > 0 ? (now - lastAutoFg) : -1);
+                stats.put("autoForegroundLastRecoveryMs", RawLocationProvider.sAutoFgLastRecoveryMs);
                 callbackContext.success(stats);
             } catch (JSONException e) {
                 callbackContext.sendPluginResult(ErrorPluginResult.from("getWatchdogStats failed", e, PluginException.JSON_ERROR));
